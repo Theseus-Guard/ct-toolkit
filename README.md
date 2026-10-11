@@ -95,7 +95,7 @@ The L2 judge does not evaluate Jinja2 expressions in user requests or model resp
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Tests**        | ✅ 397 passed, 3 skipped (100% success rate, 90% coverage)                                                                                                                                                          |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
-| **Last Phase**   | ✅ v0.3.39: urllib3 >=2.8.0 and LiteLLM >=1.104.0 fix Chunked Deflate infinite loop and authenticated SSRF / provider-credential exfiltration (Dependabot #69/#70)                                                     |
+| **Last Phase**   | ✅ v0.3.40: fsspec 2026.9.0 fixes ReferenceFileSystem template-injection RCE and multidict 6.9.1 fixes items-view reference leak (Dependabot #72/#73)                                                     |
 | **Current Goal** | 🔶 Phase 7: Multi-Agent Synchronization (Integration)                                                                                                                                                               |
 
 ### Framework & Model Support

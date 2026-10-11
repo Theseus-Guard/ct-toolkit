@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [0.3.40] - 2026-10-11
+
+### Security
+
+- **fsspec** — Updated the transitive lock resolution to `fsspec 2026.9.0` (from 2026.3.0), fixing Server-Side Template Injection in `ReferenceFileSystem` that could lead to Remote Code Execution (GHSA-27vj-qcqg-25rc / CVE-2026-104851, Dependabot #72). Fixed in `>= 2026.6.0`.
+- **multidict** — Updated the transitive lock resolution to `multidict 6.9.1` (from 6.7.1), fixing a reference leak in `CIMultiDict`/`MultiDict` items-view union and subtraction (GHSA-54p9-h82j-f925 / CVE-2026-104874, Dependabot #73). Fixed in `>= 6.9.1`.
+- **urllib3** — Lock already resolves to `2.8.0`; Dependabot #71 (HTTPS proxy TLS configuration, GHSA-8988-9cw3-xx77) is covered by this release line.
+
+### Validation
+
+- **Automated Tests:** `397 passed, 3 skipped`.
+
 ## [0.3.39] - 2026-10-08
 
 ### Security
