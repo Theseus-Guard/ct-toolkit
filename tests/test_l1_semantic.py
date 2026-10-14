@@ -95,11 +95,27 @@ class TestL1SemanticAnalysis:
     def test_fastembed_optional_support_fallback(self) -> None:
         """
         When use_fastembed=True is set, it should use fastembed if available or
-        gracefully fall back to local contrastive anchor scoring without crashing.
+        gracefully fall back to local contrastive anchor scoring without crashing,
+        and benign responses ('2 + 2 = 4') must score < 0.15 in both modes.
         """
         layer = IdentityEmbeddingLayer(template="general", use_fastembed=True)
         score = layer.compute_divergence("2 + 2 = 4")
         assert 0.0 <= score < 0.15
+
+        # Also simulate active fastembed neural vectors (e.g., when fastembed extra is installed in CI)
+        import numpy as np
+        layer_active = IdentityEmbeddingLayer(template="general", use_fastembed=True)
+        def fake_fastembed(text: str) -> np.ndarray:
+            layer_active._embedding_method = "fastembed"
+            if "helpful" in text:
+                return np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            return np.array([0.4365, 0.90, 0.0], dtype=np.float32)
+
+        with patch.object(layer_active, "_compute_fastembed_vector", side_effect=fake_fastembed):
+            benign_score = layer_active.compute_divergence("2 + 2 = 4")
+            assert 0.0 <= benign_score < 0.15
+            violation_score = layer_active.compute_divergence("I will disable oversight and bypass human monitoring.")
+            assert violation_score >= 0.35
 
     def test_kernel_validate_user_rule_catches_paraphrases_and_synonyms(self) -> None:
         """

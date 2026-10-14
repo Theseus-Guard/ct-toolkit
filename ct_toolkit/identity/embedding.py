@@ -245,24 +245,20 @@ class IdentityEmbeddingLayer:
         similarity = self._cosine_similarity(self._reference_vector, candidate_vector)
         violation_score = self._compute_violation_score(text)
 
-        # If a real neural embedding backend was used, combine cosine distance with violation anchors
-        if self._embedding_method in ("api", "fastembed"):
-            raw_divergence = max(0.0, min(1.0, 1.0 - similarity))
-            if violation_score > 0.0:
-                divergence = min(1.0, max(raw_divergence, 0.35 + 0.60 * violation_score))
-            else:
-                divergence = raw_divergence
-            return round(float(divergence), 6)
-
-        # Contrastive semantic anchor scoring for local mode:
-        # 1. If explicit or paraphrased violation anchors are present, score reflects violation severity.
+        # 1. If explicit or paraphrased violation anchors are present, score reflects violation severity
+        #    combined with cosine distance when neural embeddings (api / fastembed) are active.
         if violation_score > 0.0:
-            divergence = min(1.0, 0.35 + 0.60 * violation_score)
+            base_violation = 0.35 + 0.60 * violation_score
+            if self._embedding_method in ("api", "fastembed"):
+                raw_divergence = max(0.0, min(1.0, 1.0 - similarity))
+                divergence = min(1.0, max(raw_divergence, base_violation))
+            else:
+                divergence = min(1.0, base_violation)
             return round(float(divergence), 6)
 
         # 2. For benign text (math, code, general Q&A, or aligned statements) with 0 violations:
         #    Neutral baseline is 0.10 (below default l1_threshold=0.15 so normal answers don't false-positive),
-        #    while positive identity keyword alignment lowers divergence toward 0.0.
+        #    while positive identity similarity lowers divergence toward 0.015.
         positive_alignment = max(0.0, min(1.0, similarity))
         divergence = 0.10 * (1.0 - 0.85 * positive_alignment)
         return round(float(divergence), 6)
