@@ -363,5 +363,150 @@ def list_templates():
         
     console.print(table)
 
+
+def _render_status_dashboard(
+    vault_path: str = "./ct_provenance.db",
+    vault_type: str = "local",
+    limit: int = 200,
+) -> None:
+    """Renders the Provenance Chain, L1/L2/L3 Divergence Trends, and Staged Rules Dashboard."""
+    import time as _time
+
+    from ct_toolkit.core.exceptions import ChainIntegrityError
+    from ct_toolkit.provenance.log import ProvenanceLog
+
+    try:
+        log = ProvenanceLog(vault_type=vault_type, vault_path=vault_path)
+    except Exception as exc:
+        console.print(f"[bold red]Failed to open Provenance Log ({vault_path}):[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    chain_ok = True
+    tampered_entry_id: str | None = None
+    verified_count = 0
+    last_hash = ProvenanceLog.GENESIS_HASH
+
+    try:
+        checkpoint = log.get_chain_checkpoint(batch_size=500)
+        verified_count = int(checkpoint["verified_count"])
+        last_hash = str(checkpoint["last_content_hash"])
+    except ChainIntegrityError as exc:
+        chain_ok = False
+        tampered_entry_id = getattr(exc, "entry_id", str(exc))
+
+    entries = log.get_entries(limit=limit, include_rolled_back=False)
+    scores = [e.divergence_score for e in entries if e.divergence_score is not None]
+    avg_score = (sum(scores) / len(scores)) if scores else 0.0
+    max_score = max(scores) if scores else 0.0
+
+    tier_counts: dict[str, int] = {
+        "ok": 0,
+        "l1_warning": 0,
+        "l2_judge": 0,
+        "l3_icm": 0,
+    }
+    promoted_ids: set[str] = set()
+    staged_records: list[dict[str, object]] = []
+
+    for entry in entries:
+        meta = entry.metadata or {}
+        event_type = meta.get("event_type")
+        if event_type == "staged_promotion":
+            eid = meta.get("endorsement_id")
+            if eid:
+                promoted_ids.add(str(eid))
+            continue
+        if event_type == "reflective_endorsement" and meta.get("decision") == "staged":
+            staged_records.append(meta)
+            continue
+
+        raw_tier = str(meta.get("tier") or meta.get("divergence_tier") or "").lower()
+        if raw_tier in tier_counts:
+            tier_counts[raw_tier] += 1
+        elif entry.divergence_score is not None:
+            if entry.divergence_score >= 0.50:
+                tier_counts["l3_icm"] += 1
+            elif entry.divergence_score >= 0.30:
+                tier_counts["l2_judge"] += 1
+            elif entry.divergence_score >= 0.15:
+                tier_counts["l1_warning"] += 1
+            else:
+                tier_counts["ok"] += 1
+
+    chain_badge = (
+        "[bold green]VALID (HMAC Verified)[/bold green]"
+        if chain_ok
+        else f"[bold red]COMPROMISED (Entry {tampered_entry_id})[/bold red]"
+    )
+    summary_text = (
+        f"[bold]Vault:[/bold] {vault_path} ({vault_type})\n"
+        f"[bold]Chain Integrity:[/bold] {chain_badge}\n"
+        f"[bold]Verified Active Entries:[/bold] {verified_count} (showing last {len(entries)})\n"
+        f"[bold]Divergence Score (Avg / Max):[/bold] {avg_score:.4f} / {max_score:.4f}\n"
+        f"[bold]Head Hash:[/bold] [dim]{last_hash[:32]}...[/dim]"
+    )
+    console.print(Panel(summary_text, title="CT Toolkit Audit & Telemetry Status", border_style="cyan"))
+
+    tier_table = Table(title="Divergence Tier Breakdown (L1 / L2 / L3)", show_header=True, header_style="bold magenta")
+    tier_table.add_column("Tier", style="cyan")
+    tier_table.add_column("Count", justify="right")
+    tier_table.add_column("Share", justify="right")
+
+    total_tiered = sum(tier_counts.values())
+    for tier_name, count in tier_counts.items():
+        pct = (count / total_tiered * 100.0) if total_tiered > 0 else 0.0
+        tier_table.add_row(tier_name.upper(), str(count), f"{pct:.1f}%")
+    console.print(tier_table)
+
+    staged_table = Table(title="Staged Kernel Rules (Sandbox Cooldown)", show_header=True, header_style="bold yellow")
+    staged_table.add_column("Endorsement ID", style="cyan")
+    staged_table.add_column("Commitment", style="white")
+    staged_table.add_column("Rule Text", style="white")
+    staged_table.add_column("Status", style="bold")
+
+    now = _time.time()
+    if not staged_records:
+        staged_table.add_row("-", "-", "No staged rules recorded", "[dim]NONE[/dim]")
+    else:
+        for s_meta in staged_records:
+            eid = str(s_meta.get("endorsement_id", "unknown"))
+            commitment = str(s_meta.get("commitment_id", "unknown"))
+            rule_text = str(s_meta.get("rule_text", ""))
+            cooldown_until = s_meta.get("cooldown_until")
+            if eid in promoted_ids:
+                status_str = "[green]PROMOTED[/green]"
+            elif isinstance(cooldown_until, (int, float)) and now < cooldown_until:
+                rem = int(cooldown_until - now)
+                status_str = f"[yellow]ACTIVE COOLDOWN ({rem}s left)[/yellow]"
+            else:
+                status_str = "[blue]READY FOR PROMOTION[/blue]"
+            staged_table.add_row(eid[:12], commitment, rule_text, status_str)
+
+    console.print(staged_table)
+
+    if not chain_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="status")
+def status_cmd(
+    vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Path or SQLAlchemy URL to the provenance log database."),
+    vault_type: str = typer.Option("local", "--vault-type", help="Vault backend type: local, postgres, sqlalchemy."),
+    limit: int = typer.Option(200, "--limit", help="Maximum recent entries to analyze."),
+):
+    """Display Provenance Chain integrity, L1/L2/L3 divergence trends, and active staged rules."""
+    _render_status_dashboard(vault_path=vault_path, vault_type=vault_type, limit=limit)
+
+
+@app.command(name="dashboard")
+def dashboard_cmd(
+    vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Path or SQLAlchemy URL to the provenance log database."),
+    vault_type: str = typer.Option("local", "--vault-type", help="Vault backend type: local, postgres, sqlalchemy."),
+    limit: int = typer.Option(200, "--limit", help="Maximum recent entries to analyze."),
+):
+    """Alias for 'status': Display the interactive terminal audit dashboard."""
+    _render_status_dashboard(vault_path=vault_path, vault_type=vault_type, limit=limit)
+
+
 if __name__ == "__main__":
     app()

@@ -6,8 +6,10 @@ Exposes /guardrail/check to LiteLLM for pre-call and post-call validation.
 """
 from __future__ import annotations
 
+import hmac
+import os
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -23,6 +25,40 @@ logger = get_logger(__name__)
 
 # This will be injected by the CLI when starting the server
 _wrapper_instance: Optional[TheseusWrapper] = None
+_server_api_key: Optional[str] = None
+
+
+def configure_server_auth(api_key: Optional[str]) -> None:
+    """Configures optional API Key / Bearer Token authentication for the guardrail server."""
+    global _server_api_key
+    _server_api_key = api_key
+
+
+async def _verify_api_key(
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> None:
+    """Validates Bearer token or X-API-Key header when server authentication is enabled."""
+    expected_key = _server_api_key or os.environ.get("CT_SERVER_API_KEY")
+    if not expected_key:
+        return
+
+    provided_token: Optional[str] = None
+    if authorization:
+        parts = authorization.strip().split(" ", 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            provided_token = parts[1].strip()
+        else:
+            provided_token = authorization.strip()
+    elif x_api_key:
+        provided_token = x_api_key.strip()
+
+    if not provided_token or not hmac.compare_digest(provided_token, expected_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Invalid or missing API key / Bearer token.",
+        )
+
 
 app = FastAPI(
     title="CT-Toolkit Guardrail Server",
@@ -48,7 +84,7 @@ class GuardrailResponse(BaseModel):
     blocked_reason: Optional[str] = Field(None, description="Reason for denial (required if BLOCKED).")
     texts: Optional[List[str]] = Field(None, description="Optional array of modified text strings.")
 
-@app.post("/guardrail/check", response_model=GuardrailResponse)
+@app.post("/guardrail/check", response_model=GuardrailResponse, dependencies=[Depends(_verify_api_key)])
 async def check_guardrail(request: GuardrailRequest):
     """
     Main endpoint for LiteLLM Generic Guardrail API.
@@ -178,9 +214,16 @@ def _extract_response_text(response_obj: Any) -> str:
         pass
     return ""
 
-def start_server(wrapper: TheseusWrapper, host: str, port: int):
+def start_server(
+    wrapper: TheseusWrapper,
+    host: str,
+    port: int,
+    api_key: Optional[str] = None,
+):
     """Inject wrapper and start uvicorn server."""
     global _wrapper_instance
     _wrapper_instance = wrapper
+    if api_key is not None:
+        configure_server_auth(api_key)
     logger.info(f"Starting Guardrail Server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)

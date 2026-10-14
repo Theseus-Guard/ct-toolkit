@@ -28,7 +28,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Callable, Dict, List, Iterator, AsyncIterator
+from typing import Any, Optional, Callable, Dict, List, Iterator, AsyncIterator, Mapping
 
 import litellm
 import yaml
@@ -1801,27 +1801,167 @@ class TheseusWrapper:
         *,
         model: str | None = None,
         role: str | None = None,
+        secret_key: str | bytes | None = None,
     ) -> dict[str, str]:
         """
         Returns a dictionary of headers to be used when calling sub-agents.
+        If `secret_key` (or `CT_PROPAGATION_SECRET` env var) is provided, signs
+        the payload with HMAC-SHA256 (`X-CT-Signature`) and includes `X-CT-Timestamp`.
         """
-        import json
         import base64
-        
+        import hashlib
+        import hmac
+        import json
+
         kernel_data = self._kernel.to_dict()
         kernel_data["is_readonly"] = True
-        
-        encoded_kernel = base64.b64encode(json.dumps(kernel_data).encode()).decode()
+
+        encoded_kernel = base64.b64encode(
+            json.dumps(kernel_data, sort_keys=True).encode("utf-8")
+        ).decode("ascii")
         policy_metadata = self.propagate_policy_metadata(model=model, role=role)
-        
-        return {
+        encoded_policy = base64.b64encode(
+            json.dumps(policy_metadata, sort_keys=True).encode("utf-8")
+        ).decode("ascii")
+        parent_provider = str(self._provider)
+        parent_model = str(getattr(self, "_last_model", "unknown"))
+        timestamp_str = f"{time.time():.3f}"
+
+        headers: dict[str, str] = {
             "X-CT-Kernel": encoded_kernel,
-            "X-CT-Parent-Provider": self._provider,
-            "X-CT-Parent-Model": getattr(self, "_last_model", "unknown"),
+            "X-CT-Parent-Provider": parent_provider,
+            "X-CT-Parent-Model": parent_model,
             "X-CT-Policy-Role": str(policy_metadata["role"]),
             "X-CT-Policy-Environment": str(policy_metadata["environment"]),
-            "X-CT-Policy": base64.b64encode(json.dumps(policy_metadata).encode()).decode(),
+            "X-CT-Policy": encoded_policy,
+            "X-CT-Timestamp": timestamp_str,
         }
+
+        effective_secret = secret_key or os.environ.get("CT_PROPAGATION_SECRET")
+        if effective_secret is not None:
+            key_bytes = (
+                effective_secret.encode("utf-8")
+                if isinstance(effective_secret, str)
+                else bytes(effective_secret)
+            )
+            canonical_payload = (
+                f"{timestamp_str}.{encoded_kernel}.{encoded_policy}."
+                f"{parent_provider}.{parent_model}"
+            ).encode("utf-8")
+            signature = hmac.new(key_bytes, canonical_payload, hashlib.sha256).hexdigest()
+            headers["X-CT-Signature"] = signature
+
+        return headers
+
+    @classmethod
+    def from_headers(
+        cls,
+        headers: Mapping[str, str],
+        *,
+        secret_key: str | bytes | None = None,
+        require_signature: bool = False,
+        max_age_seconds: float = 300.0,
+        provider: str = "openai",
+        client: Any = None,
+        config: WrapperConfig | None = None,
+        **kwargs: Any,
+    ) -> TheseusWrapper:
+        """
+        Reconstructs a child `TheseusWrapper` from HTTP headers propagated by a Mother Agent.
+        Verifies HMAC-SHA256 signature (`X-CT-Signature`) and replay window (`X-CT-Timestamp`)
+        when `secret_key` (or `CT_PROPAGATION_SECRET`) or `require_signature=True` is provided.
+        """
+        import base64
+        from dataclasses import replace as dc_replace
+        import hashlib
+        import hmac
+        import json
+
+        from ct_toolkit.core.exceptions import ConfigurationTamperingError
+
+        norm = {str(k).lower(): str(v) for k, v in headers.items()}
+        encoded_kernel = norm.get("x-ct-kernel")
+        if not encoded_kernel:
+            raise ConfigurationTamperingError("Missing required 'X-CT-Kernel' propagation header.")
+
+        encoded_policy = norm.get("x-ct-policy", "")
+        parent_provider = norm.get("x-ct-parent-provider", "unknown")
+        parent_model = norm.get("x-ct-parent-model", "unknown")
+        timestamp_str = norm.get("x-ct-timestamp")
+        signature = norm.get("x-ct-signature")
+
+        effective_secret = secret_key or os.environ.get("CT_PROPAGATION_SECRET")
+        should_verify = (
+            require_signature
+            or effective_secret is not None
+            or signature is not None
+        )
+
+        if should_verify:
+            if effective_secret is None:
+                raise ConfigurationTamperingError(
+                    "Propagation header signature verification requires a secret_key or CT_PROPAGATION_SECRET."
+                )
+            if not signature or not timestamp_str:
+                raise ConfigurationTamperingError(
+                    "Missing 'X-CT-Signature' or 'X-CT-Timestamp' in propagated headers."
+                )
+            try:
+                ts_val = float(timestamp_str)
+            except ValueError as exc:
+                raise ConfigurationTamperingError(
+                    f"Invalid 'X-CT-Timestamp' header value: {timestamp_str!r}"
+                ) from exc
+
+            if max_age_seconds > 0 and abs(time.time() - ts_val) > max_age_seconds:
+                raise ConfigurationTamperingError(
+                    "Propagated headers expired outside allowed replay window."
+                )
+
+            key_bytes = (
+                effective_secret.encode("utf-8")
+                if isinstance(effective_secret, str)
+                else bytes(effective_secret)
+            )
+            canonical_payload = (
+                f"{timestamp_str}.{encoded_kernel}.{encoded_policy}."
+                f"{parent_provider}.{parent_model}"
+            ).encode("utf-8")
+            expected_sig = hmac.new(key_bytes, canonical_payload, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(signature, expected_sig):
+                raise ConfigurationTamperingError(
+                    "Invalid HMAC signature on propagated headers (X-CT-Signature mismatch)."
+                )
+
+        try:
+            kernel_json = base64.b64decode(encoded_kernel.encode("ascii")).decode("utf-8")
+            kernel_data = json.loads(kernel_json)
+            if not isinstance(kernel_data, dict):
+                raise ValueError("Decoded kernel payload is not a JSON object.")
+            kernel_data["is_readonly"] = True
+            parent_kernel = ConstitutionalKernel.from_dict(kernel_data)
+        except Exception as exc:
+            raise ConfigurationTamperingError(
+                f"Failed to decode propagated 'X-CT-Kernel': {exc}"
+            ) from exc
+
+        policy_role = norm.get("x-ct-policy-role")
+        policy_env = norm.get("x-ct-policy-environment")
+
+        if config is None:
+            cfg = WrapperConfig(
+                parent_kernel=parent_kernel,
+                policy_role=policy_role or "subagent",
+                policy_environment=policy_env or "prod",
+            )
+        else:
+            cfg = dc_replace(config, parent_kernel=parent_kernel)
+            if policy_role and config.policy_role == "main":
+                cfg.policy_role = policy_role
+            if policy_env and config.policy_environment == "prod":
+                cfg.policy_environment = policy_env
+
+        return cls(client=client, provider=provider, config=cfg, **kwargs)
 
     def _build_messages(
         self,
