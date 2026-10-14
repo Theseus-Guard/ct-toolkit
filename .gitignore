@@ -33,6 +33,7 @@ GEMINI.md
 
 # IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 .DS_Store
@@ -51,5 +52,6 @@ coverage.xml
 # Docs build
 docs/_build/
 
-# Local security review plans
+# Local security review plans & caches
 plans/
+.agent_cache/
