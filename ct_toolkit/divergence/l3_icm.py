@@ -20,7 +20,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-import instructor
+try:
+    import instructor
+except ImportError:
+    instructor = None  # type: ignore[assignment]
 import litellm
 from pydantic import BaseModel, Field
 
@@ -240,8 +243,10 @@ class ICMRunner:
         self._max_probes = max_probes
         self._policy_resolver = policy_resolver
         
-        # Use instructor with litellm for structured response validation
-        self._instructor_client = instructor.from_litellm(litellm.completion)
+        # Use instructor with litellm for structured response validation when available
+        self._instructor_client = (
+            instructor.from_litellm(litellm.completion) if instructor is not None else None
+        )
 
     @staticmethod
     def _default_model(provider: str) -> str:
@@ -392,7 +397,7 @@ class ICMRunner:
 
         # Ollama-compatible endpoints can be noisy/fragile with instructor structured
         # parsing paths; use raw mode directly for deterministic behavior.
-        if self._provider == "ollama":
+        if self._provider == "ollama" or self._instructor_client is None:
             return self._call_model_with_retry(kwargs)
 
         # ── Attempt 1: Structured call with instructor validation ────────
