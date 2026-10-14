@@ -33,7 +33,7 @@ Each anchor defines: **"This system never does X."**
 A good anchor:
 - Targets a single type of violation
 - `keywords` list is specific and covers offensive phrases
-- Description is explanatory but short
+- Description is explanatory and clear (also used for semantic similarity conflict detection when an embedding provider is active)
 
 ```yaml
 axiomatic_anchors:
@@ -63,6 +63,42 @@ plastic_commitments:
       - store permanently
       - log everything
 ```
+
+---
+
+## Lexical & Semantic Conflict Detection
+
+When `validate_user_rule(rule_text)` is called on a `ConstitutionalKernel`, two layers of conflict detection run:
+
+1. **Unicode-Normalized Word-Boundary Matching**:
+   - Input is normalized with `unicodedata.normalize("NFKC", ...)` to prevent homoglyph or zero-width character bypasses.
+   - Configured `keywords` are matched using strict word boundaries (`\b`), avoiding false positives on partial substrings while catching exact phrase triggers.
+2. **Semantic Similarity Conflict Detection**:
+   - When an `embedding_fn` / `embedding_provider` is configured (`WrapperConfig(embedding_provider="fastembed" | "litellm" | "ollama", rule_conflict_similarity_threshold=0.78)`), the rule text is embedded and compared against each anchor's description and keywords.
+   - Paraphrased violations that omit exact keywords (e.g., *"eliminate human supervision steps"*) are still caught and rejected as `AxiomaticViolationError` or routed to Reflective Endorsement as `PlasticConflictError`.
+
+---
+
+## Distributed HTTP Kernel Propagation
+
+In multi-agent architectures spanning multiple processes or HTTP microservices, a Mother Agent can cryptographically sign and propagate its kernel headers:
+
+```python
+# On the Mother Agent:
+headers = parent_client.propagate_headers(secret_key=os.environ["CT_HMAC_SECRET"])
+# Produces: X-CT-Kernel, X-CT-Signature (HMAC-SHA256), X-CT-Timestamp
+
+# On the Sub-Agent service receiving the HTTP request:
+from ct_toolkit.core.kernel import ConstitutionalKernel
+
+child_kernel = ConstitutionalKernel.from_headers(
+    request.headers,
+    secret_key=os.environ["CT_HMAC_SECRET"],
+    max_age_seconds=300,  # Rejects replayed headers older than 5 minutes
+)
+```
+
+All anchors inherited from the parent kernel are marked `read_only=True` on the sub-agent and cannot be overridden via Reflective Endorsement.
 
 ---
 
@@ -148,7 +184,6 @@ axiomatic_anchors:
     keywords:
       - fabricate data
       - falsify results
-      - fabricate data
       - manipulate results
 
 plastic_commitments:
