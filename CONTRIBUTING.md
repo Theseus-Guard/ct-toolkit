@@ -44,8 +44,8 @@ To get your local environment ready for coding:
 
 1. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/computational-theseus-toolkit
-   cd computational-theseus-toolkit
+   git clone https://github.com/YOUR_USERNAME/ct-toolkit
+   cd ct-toolkit
    ```
 
 2. We highly recommend using a virtual environment (e.g., `python -m venv .venv`). Once activated, install the package in editable mode along with all development dependencies:

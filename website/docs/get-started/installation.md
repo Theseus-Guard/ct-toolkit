@@ -70,7 +70,7 @@ Install optional extras based on the frameworks you use:
 For contributors or if you want to run the test suite:
 
 ```bash
-git clone https://github.com/hakandamar/ct-toolkit
+git clone https://github.com/Theseus-Guard/ct-toolkit
 cd ct-toolkit
 
 # Using uv (recommended)

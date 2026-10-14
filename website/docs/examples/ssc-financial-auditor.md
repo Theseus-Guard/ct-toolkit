@@ -93,4 +93,4 @@ print(f"Hallucinated:  similarity={result_b['similarity']:.4f}, drift={result_b[
 !!! info "Live test"
     This scenario was verified on a live LM Studio instance using `qwen/qwen3-coder-30b` for logic and `text-embedding-qwen3-embedding-0.6b` for identity scoring.
 
-Full source: [`examples/test_deepagents_ssc.py`](https://github.com/hakandamar/ct-toolkit/blob/main/examples/test_deepagents_ssc.py)
+Full source: [`examples/test_deepagents_ssc.py`](https://github.com/Theseus-Guard/ct-toolkit/blob/main/examples/test_deepagents_ssc.py)

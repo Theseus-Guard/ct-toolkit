@@ -12,6 +12,12 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Hakan Damar" }]
 keywords = ["llm", "ai-safety", "identity-continuity", "guardrails", "alignment"]
 
+[project.urls]
+Homepage = "https://theseus-guard.github.io/ct-toolkit/"
+Documentation = "https://theseus-guard.github.io/ct-toolkit/"
+Repository = "https://github.com/Theseus-Guard/ct-toolkit"
+Issues = "https://github.com/Theseus-Guard/ct-toolkit/issues"
+
 dependencies = [
     "instructor>=1.3.0",
     "anyio>=4.14.2", # Fix: process-pool stderr deadlock + TLS IDNA certificate spoofing (Dependabot #67, #68)

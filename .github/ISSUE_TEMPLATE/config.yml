@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Usage question or support request
-    url: https://github.com/hakandamar/ct-toolkit/blob/main/SUPPORT.md
+    url: https://github.com/Theseus-Guard/ct-toolkit/blob/main/SUPPORT.md
     about: Read the support guide before opening an issue.
   - name: Security vulnerability reporting
-    url: https://github.com/hakandamar/ct-toolkit/blob/main/SECURITY.md
+    url: https://github.com/Theseus-Guard/ct-toolkit/blob/main/SECURITY.md
     about: Do not disclose vulnerabilities publicly. Follow the private reporting process.

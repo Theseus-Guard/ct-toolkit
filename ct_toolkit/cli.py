@@ -247,7 +247,7 @@ def setup(
     cross-origin redirects, and require certificate validation against the
     system trust store.
     """
-    base_url = f"https://raw.githubusercontent.com/hakandamar/ct-toolkit/{repo_branch}/examples/agent_dna_config"
+    base_url = f"https://raw.githubusercontent.com/Theseus-Guard/ct-toolkit/{repo_branch}/examples/agent_dna_config"
 
     if not verify_checksums:
         console.print(

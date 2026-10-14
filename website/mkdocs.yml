@@ -1,10 +1,10 @@
 site_name: CT Toolkit
 site_description: Identity Continuity & Hierarchical Guardrails for Agentic AI Systems
 site_author: Hakan Damar
-site_url: https://hakandamar.github.io/ct-toolkit
+site_url: https://theseus-guard.github.io/ct-toolkit
 
-repo_name: hakandamar/ct-toolkit
-repo_url: https://github.com/hakandamar/ct-toolkit
+repo_name: Theseus-Guard/ct-toolkit
+repo_url: https://github.com/Theseus-Guard/ct-toolkit
 edit_uri: edit/main/website/docs/
 
 theme:
@@ -94,7 +94,7 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/hakandamar/ct-toolkit
+      link: https://github.com/Theseus-Guard/ct-toolkit
       name: GitHub Repository
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/ct-toolkit/

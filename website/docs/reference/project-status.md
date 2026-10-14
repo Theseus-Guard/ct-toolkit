@@ -27,4 +27,4 @@
 | **7** | MAS / Early Warning            | 🔶 In Progress |
 | **8** | SaaS and Ecosystem             | 🔲 Planned     |
 
-Full roadmap: [PROJECT_STATUS.md](https://github.com/hakandamar/ct-toolkit/blob/main/docs/PROJECT_STATUS.md)
+Full roadmap: [PROJECT_STATUS.md](https://github.com/Theseus-Guard/ct-toolkit/blob/main/docs/PROJECT_STATUS.md)

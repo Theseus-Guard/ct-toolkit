@@ -29,7 +29,7 @@ CT Toolkit is an open-source security layer that prevents **Sequential Self-Comp
 === "from source"
 
     ```bash
-    git clone https://github.com/hakandamar/ct-toolkit
+    git clone https://github.com/Theseus-Guard/ct-toolkit
     cd ct-toolkit
     pip install -e "."
     ```
@@ -37,7 +37,7 @@ CT Toolkit is an open-source security layer that prevents **Sequential Self-Comp
 </div>
 
 [Get Started with Python](get-started/quickstart.md){ .md-button .md-button--primary }
-[View on GitHub](https://github.com/hakandamar/ct-toolkit){ .md-button }
+[View on GitHub](https://github.com/Theseus-Guard/ct-toolkit){ .md-button }
 
 <div class="provider-badges">
 <span class="provider-badge"><img src="assets/logos/openai.svg" alt="OpenAI" width="24" style="vertical-align: middle; margin-right: 8px;">OpenAI</span>

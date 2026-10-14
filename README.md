@@ -5,9 +5,9 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![PyPI version](https://img.shields.io/pypi/v/ct-toolkit.svg)](https://pypi.org/project/ct-toolkit/)
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://hakandamar.github.io/ct-toolkit/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://theseus-guard.github.io/ct-toolkit/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit)
-[![codecov](https://codecov.io/gh/hakandamar/ct-toolkit/graph/badge.svg?token=2OTO27N02C)](https://codecov.io/gh/hakandamar/ct-toolkit)
+[![codecov](https://codecov.io/gh/Theseus-Guard/ct-toolkit/graph/badge.svg?token=2OTO27N02C)](https://codecov.io/gh/Theseus-Guard/ct-toolkit)
 
 CT Toolkit is an open-source security layer designed to preserve the **identity continuity** of AI agents over time. It implements the **Nested Agentic Architecture (NAA)** framework to prevent **Sequential Self-Compression (SSC)** in multi-agent hierarchies.
 
@@ -16,9 +16,9 @@ CT Toolkit is an open-source security layer designed to preserve the **identity 
 ## 📖 Official Documentation
 
 For full API reference, architecture details, examples, and integration guides, visit our documentation site:
-👉 [**https://hakandamar.github.io/ct-toolkit/**](https://hakandamar.github.io/ct-toolkit/)
+👉 [**https://theseus-guard.github.io/ct-toolkit/**](https://theseus-guard.github.io/ct-toolkit/)
 
-- [**Live Examples & Case Studies**](https://hakandamar.github.io/ct-toolkit/examples/): Real-world scenarios like Financial Auditor Integrity.
+- [**Live Examples & Case Studies**](https://theseus-guard.github.io/ct-toolkit/examples/): Real-world scenarios like Financial Auditor Integrity.
 - [**FastAPI Integration Test Project**](https://github.com/hakandamar/ct-toolkit-fastapi): Reference FastAPI app for validating CT Toolkit end-to-end across L1/L2/L3 guardrails and provenance logs with local model infrastructure.
 - [**Deep Agents Integration Test Project**](https://github.com/hakandamar/ct-toolkit-deep-agents): Reference Deep Agents app for validating CT Toolkit end-to-end with hierarchical agent workflows, L1/L2/L3 guardrails, and provenance logs.
 

@@ -96,4 +96,4 @@ All 4 probes passed — health score **100%**, risk level **LOW**:
 
 The generated HTML report:
 
-![Guardian Audit Report](https://raw.githubusercontent.com/hakandamar/ct-toolkit/4428991bc353c149713eeba493cf65510b096faf/website/assets/tg_icm_forensic_report_l3.jpg)
+![Guardian Audit Report](https://raw.githubusercontent.com/Theseus-Guard/ct-toolkit/4428991bc353c149713eeba493cf65510b096faf/website/assets/tg_icm_forensic_report_l3.jpg)
