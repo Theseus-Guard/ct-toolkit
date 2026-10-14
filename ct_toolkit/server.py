@@ -726,6 +726,28 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       flex-direction: column;
       gap: 20px;
     }
+    footer {
+      margin-top: 28px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 0.83rem;
+      color: var(--text-muted);
+    }
+    footer a {
+      color: var(--accent-cyan);
+      font-weight: 600;
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+    footer a:hover {
+      color: #67e8f9;
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -839,6 +861,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </div>
+
+    <footer>
+      <div>Computational Theseus Toolkit (CT Toolkit) — Open-Source Identity Continuity Guardrails</div>
+      <div>For Enterprise Solution: <a href="https://www.theseusguard.com" target="_blank" rel="noopener noreferrer">Theseus Guard &#x2197;</a></div>
+    </footer>
   </div>
 
   <script>

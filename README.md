@@ -78,6 +78,8 @@ In complex agentic workflows, LLMs tend to "drift" from their original instructi
 - **Autonomous Self-Correction**: Active L2->L1 feedback loop that retries and corrects divergent responses before they reach the user.
 - **Enterprise Provenance & Observability**: Immutable HMAC-signed hash chain supporting SQLite and PostgreSQL/SQLAlchemy with paginated verification and OpenTelemetry (OTel) spans/metrics.
 
+![CT Toolkit Web Audit & Telemetry Dashboard](docs/ct_toolkit_web_dashboard.png)
+
 ---
 
 ## Quick Start
