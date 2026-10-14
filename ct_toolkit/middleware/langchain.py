@@ -401,3 +401,62 @@ class TheseusChatModel(BaseChatModel):
             },
         )
         return ChatResult(generations=[generation])
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        _ = run_manager
+        user_text = self._extract_user_text(messages)
+        system_prompt = self._extract_system(messages)
+
+        call_kwargs: Dict[str, Any] = dict(kwargs)
+        if stop:
+            call_kwargs["stop"] = stop
+
+        resolved_policy = self.wrapper.resolve_llm_policy(model=self.model)
+        tool_call_allowed = bool(resolved_policy["effective"].get("tool_call", False)) and self.allow_tools
+
+        if tool_call_allowed:
+            if self.bound_tools:
+                call_kwargs["tools"] = self.bound_tools
+            if self.bound_tool_choice is not None:
+                call_kwargs["tool_choice"] = self.bound_tool_choice
+        else:
+            if not self.allow_tools:
+                provider = getattr(self.wrapper, "_provider", "unknown")
+                if provider != "ollama":
+                    call_kwargs.update(
+                        {
+                            "tools": [],
+                            "tool_choice": "none",
+                            "parallel_tool_calls": False,
+                        }
+                    )
+            else:
+                call_kwargs.update(self.wrapper.resolve_tool_control_kwargs(model=self.model))
+
+        ct_response = await self.wrapper.achat(
+            user_text,
+            model=self.model,
+            system=system_prompt,
+            **call_kwargs,
+        )
+
+        tool_calls = self._extract_tool_calls(ct_response.raw_response)
+
+        ai_message = AIMessage(content=ct_response.content or "", tool_calls=tool_calls)
+        generation = ChatGeneration(
+            message=ai_message,
+            generation_info={
+                "divergence_score": ct_response.divergence_score,
+                "divergence_tier": ct_response.divergence_tier,
+                "provenance_id": ct_response.provenance_id,
+                "ct_policy": self.policy_metadata,
+                "tool_calls": tool_calls,
+            },
+        )
+        return ChatResult(generations=[generation])

@@ -89,7 +89,7 @@ include = ["ct_toolkit*"]
 ct-toolkit = "ct_toolkit.cli:app"
 
 [tool.pytest.ini_options]
-extraPaths = ["."]
+pythonpath = ["."]
 
 [dependency-groups]
 dev = [

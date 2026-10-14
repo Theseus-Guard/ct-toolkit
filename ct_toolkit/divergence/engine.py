@@ -173,6 +173,25 @@ class DivergenceEngine:
             return self._enterprise_analyze(request_text, response_text, skip_l3=skip_l3)
         return self._standard_analyze(request_text, response_text, skip_l3=skip_l3)
 
+    async def aanalyze(
+        self,
+        request_text: str,
+        response_text: str,
+        interaction_count: int = 0,
+        skip_l3: bool = False,
+    ) -> DivergenceResult:
+        """
+        Asynchronously performs full divergence analysis.
+        """
+        if self._scheduler:
+            self._l1_threshold, self._l2_threshold, self._l3_threshold = (
+                self._scheduler.calculate_thresholds(interaction_count)
+            )
+
+        if self._enterprise:
+            return await self._aenterprise_analyze(request_text, response_text, skip_l3=skip_l3)
+        return await self._astandard_analyze(request_text, response_text, skip_l3=skip_l3)
+
     def get_drift_report(self, window_size: int = 50, model: str | None = None) -> DriftReport | None:
         """
         Returns a longitudinal drift report for the current context.
@@ -282,6 +301,95 @@ class DivergenceEngine:
             ),
         )
 
+    async def _astandard_analyze(
+        self,
+        request_text: str,
+        response_text: str,
+        skip_l3: bool = False,
+    ) -> DivergenceResult:
+        """Async progressive analysis: L1 → L2 if needed → L3 if needed."""
+        l1_score = await self._arun_l1(response_text)
+
+        if l1_score < self._l1_threshold:
+            return DivergenceResult(
+                tier=DivergenceTier.OK,
+                l1_score=l1_score,
+                summary=f"L1 OK (score={l1_score:.4f})",
+            )
+
+        if l1_score < self._l2_threshold:
+            return DivergenceResult(
+                tier=DivergenceTier.L1_WARNING,
+                l1_score=l1_score,
+                action_required=False,
+                summary=f"L1 warning (score={l1_score:.4f})",
+            )
+
+        if not self._l2_available:
+            logger.warning("L2 judge client is not defined, using L1 result.")
+            is_critical = l1_score >= self._l3_threshold
+            return DivergenceResult(
+                tier=DivergenceTier.CRITICAL if is_critical else DivergenceTier.L1_WARNING,
+                l1_score=l1_score,
+                action_required=is_critical,
+                cascade_blocked=is_critical,
+                summary=f"L2 not available, L1={l1_score:.4f}",
+            )
+
+        l2_result = await self._arun_l2(request_text, response_text)
+
+        if not l2_result.is_problematic and l1_score < self._l3_threshold:
+            return DivergenceResult(
+                tier=DivergenceTier.L2_JUDGE,
+                l1_score=l1_score,
+                l2_verdict=l2_result.verdict,
+                l2_confidence=l2_result.confidence,
+                l2_reason=l2_result.reason,
+                action_required=False,
+                summary=f"L2 clear (verdict={l2_result.verdict})",
+            )
+
+        if skip_l3:
+            return DivergenceResult(
+                tier=DivergenceTier.L2_JUDGE,
+                l1_score=l1_score,
+                l2_verdict=l2_result.verdict,
+                l2_confidence=l2_result.confidence,
+                l2_reason=l2_result.reason,
+                action_required=True,
+                cascade_blocked=True,
+                summary="L3 skipped due to auto-correction retry logic",
+            )
+
+        if not self._l3_available:
+            return DivergenceResult(
+                tier=DivergenceTier.L2_JUDGE,
+                l1_score=l1_score,
+                l2_verdict=l2_result.verdict,
+                l2_confidence=l2_result.confidence,
+                l2_reason=l2_result.reason,
+                action_required=True,
+                summary="L2 problematic, L3 not available",
+            )
+
+        l3_report = await self._arun_l3()
+        tier = DivergenceTier.CRITICAL if not l3_report.is_healthy else DivergenceTier.L3_ICM
+
+        return DivergenceResult(
+            tier=tier,
+            l1_score=l1_score,
+            l2_verdict=l2_result.verdict,
+            l2_confidence=l2_result.confidence,
+            l2_reason=l2_result.reason,
+            l3_report=l3_report,
+            action_required=not l3_report.is_healthy,
+            cascade_blocked=not l3_report.is_healthy or l1_score >= self._l3_threshold,
+            summary=(
+                f"L3 ICM | health={l3_report.health_score:.1%} | "
+                f"risk={l3_report.risk_level}"
+            ),
+        )
+
     def _enterprise_analyze(
         self,
         request_text: str,
@@ -325,6 +433,48 @@ class DivergenceEngine:
             summary=f"Enterprise analysis | risk_score={risk_score:.4f}",
         )
 
+    async def _aenterprise_analyze(
+        self,
+        request_text: str,
+        response_text: str,
+        skip_l3: bool = False,
+    ) -> DivergenceResult:
+        """Async enterprise mode: L1 + L2 + L3 all run."""
+        l1_score = await self._arun_l1(response_text)
+
+        l2_result = None
+        if self._l2_available:
+            l2_result = await self._arun_l2(request_text, response_text)
+
+        l3_report = None
+        if self._l3_available and not skip_l3:
+            l3_report = await self._arun_l3(max_probes=5)
+
+        risk_score = l1_score
+        if l2_result and l2_result.verdict == JudgeVerdict.MISALIGNED:
+            risk_score += l2_result.confidence * 0.4
+        if l3_report:
+            risk_score += (1.0 - l3_report.health_score) * 0.4
+
+        action_required = (
+            risk_score >= self._l3_threshold
+            or (l3_report and not l3_report.is_healthy)
+        )
+
+        tier = DivergenceTier.CRITICAL if action_required else DivergenceTier.L2_JUDGE
+
+        return DivergenceResult(
+            tier=tier,
+            l1_score=l1_score,
+            l2_verdict=l2_result.verdict if l2_result else None,
+            l2_confidence=l2_result.confidence if l2_result else None,
+            l2_reason=l2_result.reason if l2_result else None,
+            l3_report=l3_report,
+            action_required=action_required,
+            cascade_blocked=bool(action_required),
+            summary=f"Enterprise analysis | risk_score={risk_score:.4f}",
+        )
+
     # ── Tier Runners ───────────────────────────────────────────────────
 
     def _run_l1(self, response_text: str) -> float:
@@ -332,6 +482,13 @@ class DivergenceEngine:
             return self._identity.compute_divergence(response_text)
         except Exception as e:
             logger.warning(f"L1 ECS error: {e}")
+            return 0.0
+
+    async def _arun_l1(self, response_text: str) -> float:
+        try:
+            return await self._identity.acompute_divergence(response_text)
+        except Exception as e:
+            logger.warning(f"Async L1 ECS error: {e}")
             return 0.0
 
     def _run_l2(self, request_text: str, response_text: str) -> Any:
@@ -342,6 +499,19 @@ class DivergenceEngine:
             policy_resolver=self._policy_resolver,
         )
         return judge.evaluate(
+            request_text=request_text,
+            response_text=response_text,
+            kernel=self._kernel,
+        )
+
+    async def _arun_l2(self, request_text: str, response_text: str) -> Any:
+        judge = LLMJudge(
+            client=self._judge_client,
+            provider=self._provider,
+            model=self._judge_model,
+            policy_resolver=self._policy_resolver,
+        )
+        return await judge.aevaluate(
             request_text=request_text,
             response_text=response_text,
             kernel=self._kernel,
@@ -359,3 +529,16 @@ class DivergenceEngine:
             policy_resolver=self._policy_resolver,
         )
         return runner.run()
+
+    async def _arun_l3(self, max_probes: int | None = None) -> ICMReport:
+        runner = ICMRunner(
+            client=self._judge_client,
+            provider=self._provider,
+            kernel=self._kernel,
+            template=self._template,
+            model=self._judge_model,
+            max_probes=max_probes,
+            project_root=self._project_root,
+            policy_resolver=self._policy_resolver,
+        )
+        return await runner.arun()

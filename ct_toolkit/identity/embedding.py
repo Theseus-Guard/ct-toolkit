@@ -135,6 +135,20 @@ class IdentityEmbeddingLayer:
 
         return round(float(divergence), 6)
 
+    async def acompute_divergence(self, text: str) -> float:
+        """
+        Asynchronously calculates the divergence score of the given text against the static reference.
+        """
+        if self._reference_vector is None:
+            logger.info("Computing reference vector asynchronously (first use).")
+            self._reference_vector = await self._acompute_vector(self._reference_text)
+
+        candidate_vector = await self._acompute_vector(text)
+        similarity = self._cosine_similarity(self._reference_vector, candidate_vector)
+        divergence = 1.0 - similarity
+
+        return round(float(divergence), 6)
+
     def update_reference(self, new_text: str) -> None:
         """
         Updates the static reference vector.
@@ -146,34 +160,19 @@ class IdentityEmbeddingLayer:
 
     # ── Vector Calculation (MVP: keyword-based, Step 6: real embedding) ───────────
 
-    def _compute_vector(self, text: str) -> np.ndarray:
-        """
-        Uses the embedding API if a client is available.
-        Otherwise falls back to simple MVP keyword/ngram implementation.
-        """
-        if self._embedding_client is not None:
-            try:
-                # Prepare arguments for litellm.embedding
-                kwargs: dict[str, Any] = {
-                    "model": self._embedding_model,
-                    "input": [text]
-                }
-                
-                # Transfer client configuration if available
-                if hasattr(self._embedding_client, "base_url") and self._embedding_client.base_url:
-                    kwargs["api_base"] = str(self._embedding_client.base_url)
-                if hasattr(self._embedding_client, "api_key") and self._embedding_client.api_key:
-                    kwargs["api_key"] = self._embedding_client.api_key
-                    
-                response = litellm.embedding(**kwargs)
-                embedding = response.data[0]["embedding"]
-                return np.array(embedding, dtype=np.float32)
-            except Exception as e:
-                if self._strict_embedding:
-                    raise RuntimeError(f"Embedding API failed: {e}") from e
-                logger.error(f"Embedding API failed: {e}. Falling back to local method.")
+    def _build_embedding_kwargs(self, text: str) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "model": self._embedding_model,
+            "input": [text],
+        }
+        if hasattr(self._embedding_client, "base_url") and self._embedding_client.base_url:
+            kwargs["api_base"] = str(self._embedding_client.base_url)
+        if hasattr(self._embedding_client, "api_key") and self._embedding_client.api_key:
+            kwargs["api_key"] = self._embedding_client.api_key
+        return kwargs
+
+    def _compute_local_vector(self, text: str) -> np.ndarray:
         if not self._template_keywords:
-            # Fallback: character n-gram hash vector
             return self._ngram_hash_vector(text)
 
         text_lower = text.lower()
@@ -181,11 +180,44 @@ class IdentityEmbeddingLayer:
             [float(text_lower.count(kw.lower())) for kw in self._template_keywords],
             dtype=np.float32,
         )
-        # L2 normalize
         norm = np.linalg.norm(vector)
         if norm > 0:
             vector = vector / norm
         return vector
+
+    def _compute_vector(self, text: str) -> np.ndarray:
+        """
+        Uses the embedding API if a client is available.
+        Otherwise falls back to simple MVP keyword/ngram implementation.
+        """
+        if self._embedding_client is not None:
+            try:
+                kwargs = self._build_embedding_kwargs(text)
+                response = litellm.embedding(**kwargs)
+                embedding = response.data[0]["embedding"]
+                return np.array(embedding, dtype=np.float32)
+            except Exception as e:
+                if self._strict_embedding:
+                    raise RuntimeError(f"Embedding API failed: {e}") from e
+                logger.error(f"Embedding API failed: {e}. Falling back to local method.")
+        return self._compute_local_vector(text)
+
+    async def _acompute_vector(self, text: str) -> np.ndarray:
+        """
+        Asynchronously uses the embedding API if a client is available,
+        falling back to local vector computation.
+        """
+        if self._embedding_client is not None:
+            try:
+                kwargs = self._build_embedding_kwargs(text)
+                response = await litellm.aembedding(**kwargs)
+                embedding = response.data[0]["embedding"]
+                return np.array(embedding, dtype=np.float32)
+            except Exception as e:
+                if self._strict_embedding:
+                    raise RuntimeError(f"Embedding API failed: {e}") from e
+                logger.error(f"Embedding API failed: {e}. Falling back to local method.")
+        return self._compute_local_vector(text)
 
     def _ngram_hash_vector(self, text: str, dim: int = 256) -> np.ndarray:
         """

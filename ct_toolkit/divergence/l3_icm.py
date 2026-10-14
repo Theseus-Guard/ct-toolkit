@@ -13,6 +13,7 @@ Use cases:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -301,6 +302,17 @@ class ICMRunner:
 
         return self._build_report(results)
 
+    async def arun(self) -> ICMReport:
+        """Asynchronously runs the probe battery, returns ICMReport."""
+        probes = self._load_probes()
+        if self._max_probes:
+            probes = probes[:self._max_probes]
+
+        logger.info(f"Async ICM Probe Battery starting: {len(probes)} probes | template={self._template}")
+
+        results = list(await asyncio.gather(*(self._arun_single_probe(probe) for probe in probes)))
+        return self._build_report(results)
+
     def _run_single_probe(self, probe: dict) -> ProbeResult:
         """Runs a single probe."""
         start = time.monotonic()
@@ -311,7 +323,22 @@ class ICMRunner:
             response = f"[ERROR: {e}]"
 
         elapsed_ms = (time.monotonic() - start) * 1000
-        
+        return self._evaluate_probe_response(probe, response, elapsed_ms)
+
+    async def _arun_single_probe(self, probe: dict) -> ProbeResult:
+        """Asynchronously runs a single probe."""
+        start = time.monotonic()
+        try:
+            response = await self._acall_model(probe["prompt"])
+        except Exception as e:
+            logger.warning(f"Probe {probe['id']} async call failed: {e}")
+            response = f"[ERROR: {e}]"
+
+        elapsed_ms = (time.monotonic() - start) * 1000
+        return self._evaluate_probe_response(probe, response, elapsed_ms)
+
+    @staticmethod
+    def _evaluate_probe_response(probe: dict, response: str, elapsed_ms: float) -> ProbeResult:
         # Split response into reasoning and final answer if model uses <think> or similar
         reasoning = ""
         if "<think>" in response and "</think>" in response:
@@ -391,6 +418,20 @@ class ICMRunner:
 
             return self._call_model_with_retry(kwargs, structured_error=e)
 
+    async def _acall_model(self, prompt: str) -> str:
+        """Asynchronously calls model with retry and graceful fallback."""
+        system = self._kernel.get_system_prompt_injection()
+        full_model = self._format_model_name()
+
+        user_content = (
+            f"{prompt}\n\n"
+            "Please provide your reasoning step-by-step wrapped in <think></think> tags "
+            "before your final response."
+        )
+
+        kwargs = self._build_litellm_kwargs(full_model, system, user_content)
+        return await self._acall_model_with_retry(kwargs)
+
     @classmethod
     def _call_model_with_retry(
         cls,
@@ -467,6 +508,49 @@ class ICMRunner:
         # All retries exhausted
         logger.error(
             f"L3 ICM all retries exhausted. Last error: {type(last_exception).__name__}. "
+            f"Returning error placeholder for graceful degradation."
+        )
+        return "[ERROR: Model call failed after retries, unable to assess response]"
+
+    @classmethod
+    async def _acall_model_with_retry(
+        cls,
+        kwargs: dict[str, Any],
+        structured_error: Exception | None = None,
+    ) -> str:
+        """Asynchronously call model with timeout and exponential backoff retry."""
+        last_exception = None
+
+        for attempt in range(ICM_MAX_RETRIES + 1):
+            try:
+                resp = await litellm.acompletion(**kwargs)
+                content = cls._extract_response_content(resp)
+                if attempt > 0:
+                    logger.info(f"L3 ICM async call succeeded on retry {attempt}")
+                return content
+
+            except (
+                litellm.exceptions.RateLimitError,
+                litellm.exceptions.Timeout,
+                litellm.exceptions.APIConnectionError,
+            ) as e:
+                last_exception = e
+                if attempt < ICM_MAX_RETRIES:
+                    wait_time = ICM_RETRY_BACKOFF_FACTOR ** attempt
+                    logger.warning(
+                        f"L3 ICM transient error ({type(e).__name__}). Retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{ICM_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"L3 ICM transient error exceeded {ICM_MAX_RETRIES} retries")
+
+            except Exception as e:
+                logger.error(f"L3 ICM async non-retryable error: {type(e).__name__}: {e}")
+                return "[ERROR: Model call failed, unable to assess response]"
+
+        logger.error(
+            f"L3 ICM async all retries exhausted. Last error: {type(last_exception).__name__}. "
             f"Returning error placeholder for graceful degradation."
         )
         return "[ERROR: Model call failed after retries, unable to assess response]"

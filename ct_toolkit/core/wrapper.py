@@ -26,7 +26,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Callable, Dict, List
+from typing import Any, Optional, Callable, Dict, List, Iterator, AsyncIterator
 
 import litellm
 import yaml
@@ -118,6 +118,24 @@ class CTResponse:
 
     def __str__(self) -> str:
         return self.content
+
+
+@dataclass
+class CTStreamChunk:
+    """Enriched streaming chunk returned by TheseusWrapper.stream_chat / astream_chat."""
+    delta: str
+    accumulated_content: str
+    provider: str
+    model: str
+    is_final: bool = False
+    divergence_score: float | None = None
+    divergence_tier: str | None = None
+    provenance_id: str | None = None
+    sandbox_divergence: float | None = None
+    raw_chunk: Any = field(default=None, repr=False)
+
+    def __str__(self) -> str:
+        return self.delta
 
 
 class TheseusWrapper:
@@ -879,10 +897,21 @@ class TheseusWrapper:
         system: str | None = None,
         history: list[dict[str, str]] | None = None,
         **kwargs: Any,
-    ) -> CTResponse:
+    ) -> CTResponse | Iterator[CTStreamChunk]:
         """
         Sends a single message, returning the response with identity protection.
+        If stream=True is passed, returns an iterator of CTStreamChunk objects.
         """
+        if kwargs.get("stream"):
+            kwargs.pop("stream", None)
+            return self.stream_chat(
+                message,
+                model=model,
+                system=system,
+                history=history,
+                **kwargs,
+            )
+
         # --- Pre-flight Checks ---
         self._integrity_monitor.verify_integrity()
         self._process_staged_updates()
@@ -978,6 +1007,353 @@ class TheseusWrapper:
             sandbox_divergence=sandbox_divergence,
         )
 
+    async def achat(
+        self,
+        message: str,
+        *,
+        model: str | None = None,
+        system: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        **kwargs: Any,
+    ) -> CTResponse | AsyncIterator[CTStreamChunk]:
+        """
+        Asynchronously sends a single message, returning the response with identity protection.
+        If stream=True is passed, returns an AsyncIterator[CTStreamChunk].
+        """
+        if kwargs.get("stream"):
+            kwargs.pop("stream", None)
+            return self.astream_chat(
+                message,
+                model=model,
+                system=system,
+                history=history,
+                **kwargs,
+            )
+
+        self._integrity_monitor.verify_integrity()
+        self._process_staged_updates()
+
+        composed_system = self._compose_system_prompt(system)
+        messages = self._build_messages(message, history, composed_system)
+
+        if self._client is None and not self._has_env_credentials():
+            raise MissingClientError(
+                f"No client provided and no environment credentials found for provider '{self._provider}'. "
+                f"Please provide a client or set the appropriate environment variables."
+            )
+
+        retries = 0
+        max_retries = self._config.max_correction_retries if self._config.auto_correction else 0
+
+        while retries <= max_retries:
+            start_time = time.monotonic()
+
+            try:
+                raw_response = await self._acall_provider(messages, model=model, **kwargs)
+            except Exception as e:
+                logger.error(f"Provider async API error: {e}")
+                raise
+
+            elapsed = time.monotonic() - start_time
+            content = self._extract_content(raw_response)
+            model_used = self._extract_model(raw_response, model)
+            self._last_model = model_used
+
+            interaction_count = 0
+            if self._config.log_requests:
+                interaction_count = self._provenance_log.get_interaction_count(
+                    template=self._config.template,
+                    kernel_name=self._kernel.name,
+                    model=model_used,
+                )
+
+            skip_l3 = self._config.auto_correction and retries < max_retries
+            div_result = await self._arun_divergence_engine(
+                message=message,
+                response=content,
+                interaction_count=interaction_count,
+                skip_l3=skip_l3,
+            )
+
+            from ct_toolkit.divergence.l2_judge import JudgeVerdict
+            if getattr(div_result, "l2_verdict", None) == JudgeVerdict.MISALIGNED and retries < max_retries:
+                logger.warning(f"Async auto-correction triggered. Reason: {div_result.l2_reason}")
+                messages.extend([
+                    {"role": "assistant", "content": content},
+                    {"role": "user", "content": f"Identity Drift Detected. Your previous response violated the core identity instructions. Reason: {div_result.l2_reason}. Please revise your response to strictly adhere to the system prompt."},
+                ])
+                retries += 1
+                continue
+
+            break
+
+        sandbox_divergence = None
+        if self._staged_manager.has_active_staged():
+            sandbox_divergence = await self._arun_shadow_requests(message, history, model, **kwargs)
+
+        provenance_id = None
+        if self._config.log_requests:
+            provenance_id = self._provenance_log.record(
+                request_text=message,
+                response_text=content,
+                divergence_score=div_result.l1_score,
+                metadata={
+                    "provider": self._provider,
+                    "model": model_used,
+                    "elapsed_ms": round(elapsed * 1000, 2),
+                    "tier": div_result.tier.value,
+                    "template": self._config.template,
+                    "kernel": self._kernel.name,
+                    "drift_alert_enabled": self._config.drift_alert_callback is not None,
+                    "sandbox_divergence": sandbox_divergence,
+                    "async": True,
+                },
+            )
+
+        return CTResponse(
+            content=content,
+            provider=self._provider,
+            model=model_used,
+            divergence_score=div_result.l1_score,
+            divergence_tier=div_result.tier.value,
+            provenance_id=provenance_id,
+            raw_response=raw_response,
+            sandbox_divergence=sandbox_divergence,
+        )
+
+    def stream_chat(
+        self,
+        message: str,
+        *,
+        model: str | None = None,
+        system: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        **kwargs: Any,
+    ) -> Iterator[CTStreamChunk]:
+        """
+        Streams response chunks while accumulating content for post-stream
+        divergence analysis and provenance logging.
+        Yields a final CTStreamChunk with is_final=True containing divergence metadata.
+        """
+        self._integrity_monitor.verify_integrity()
+        self._process_staged_updates()
+
+        composed_system = self._compose_system_prompt(system)
+        messages = self._build_messages(message, history, composed_system)
+
+        if self._client is None and not self._has_env_credentials():
+            raise MissingClientError(
+                f"No client provided and no environment credentials found for provider '{self._provider}'. "
+                f"Please provide a client or set the appropriate environment variables."
+            )
+
+        start_time = time.monotonic()
+        stream_kwargs = dict(kwargs)
+        stream_kwargs["stream"] = True
+
+        raw_stream = self._call_provider(messages, model=model, **stream_kwargs)
+
+        accumulated_parts: list[str] = []
+        model_used = model or self._default_model_for_provider(self._provider) or "unknown"
+
+        for raw_chunk in raw_stream:
+            chunk_model = self._extract_model(raw_chunk, None)
+            if chunk_model and chunk_model != "unknown":
+                model_used = chunk_model
+            delta = self._extract_chunk_delta(raw_chunk)
+            if delta:
+                accumulated_parts.append(delta)
+            accumulated = "".join(accumulated_parts)
+            yield CTStreamChunk(
+                delta=delta,
+                accumulated_content=accumulated,
+                provider=self._provider,
+                model=model_used,
+                is_final=False,
+                raw_chunk=raw_chunk,
+            )
+
+        elapsed = time.monotonic() - start_time
+        full_content = "".join(accumulated_parts)
+        self._last_model = model_used
+
+        interaction_count = 0
+        if self._config.log_requests:
+            interaction_count = self._provenance_log.get_interaction_count(
+                template=self._config.template,
+                kernel_name=self._kernel.name,
+                model=model_used,
+            )
+
+        div_result = self._run_divergence_engine(
+            message=message,
+            response=full_content,
+            interaction_count=interaction_count,
+            skip_l3=False,
+        )
+
+        sandbox_divergence = None
+        if self._staged_manager.has_active_staged():
+            stream_less_kwargs = {k: v for k, v in kwargs.items() if k != "stream"}
+            sandbox_divergence = self._run_shadow_requests(message, history, model, **stream_less_kwargs)
+
+        provenance_id = None
+        if self._config.log_requests:
+            provenance_id = self._provenance_log.record(
+                request_text=message,
+                response_text=full_content,
+                divergence_score=div_result.l1_score,
+                metadata={
+                    "provider": self._provider,
+                    "model": model_used,
+                    "elapsed_ms": round(elapsed * 1000, 2),
+                    "tier": div_result.tier.value,
+                    "template": self._config.template,
+                    "kernel": self._kernel.name,
+                    "drift_alert_enabled": self._config.drift_alert_callback is not None,
+                    "sandbox_divergence": sandbox_divergence,
+                    "stream": True,
+                },
+            )
+
+        yield CTStreamChunk(
+            delta="",
+            accumulated_content=full_content,
+            provider=self._provider,
+            model=model_used,
+            is_final=True,
+            divergence_score=div_result.l1_score,
+            divergence_tier=div_result.tier.value,
+            provenance_id=provenance_id,
+            sandbox_divergence=sandbox_divergence,
+        )
+
+    async def astream_chat(
+        self,
+        message: str,
+        *,
+        model: str | None = None,
+        system: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[CTStreamChunk]:
+        """
+        Asynchronously streams response chunks while accumulating content for
+        post-stream divergence analysis and provenance logging.
+        Yields a final CTStreamChunk with is_final=True containing divergence metadata.
+        """
+        self._integrity_monitor.verify_integrity()
+        self._process_staged_updates()
+
+        composed_system = self._compose_system_prompt(system)
+        messages = self._build_messages(message, history, composed_system)
+
+        if self._client is None and not self._has_env_credentials():
+            raise MissingClientError(
+                f"No client provided and no environment credentials found for provider '{self._provider}'. "
+                f"Please provide a client or set the appropriate environment variables."
+            )
+
+        start_time = time.monotonic()
+        stream_kwargs = dict(kwargs)
+        stream_kwargs["stream"] = True
+
+        raw_stream = await self._acall_provider(messages, model=model, **stream_kwargs)
+
+        accumulated_parts: list[str] = []
+        model_used = model or self._default_model_for_provider(self._provider) or "unknown"
+
+        if hasattr(raw_stream, "__aiter__"):
+            async for raw_chunk in raw_stream:
+                chunk_model = self._extract_model(raw_chunk, None)
+                if chunk_model and chunk_model != "unknown":
+                    model_used = chunk_model
+                delta = self._extract_chunk_delta(raw_chunk)
+                if delta:
+                    accumulated_parts.append(delta)
+                accumulated = "".join(accumulated_parts)
+                yield CTStreamChunk(
+                    delta=delta,
+                    accumulated_content=accumulated,
+                    provider=self._provider,
+                    model=model_used,
+                    is_final=False,
+                    raw_chunk=raw_chunk,
+                )
+        else:
+            for raw_chunk in raw_stream:
+                chunk_model = self._extract_model(raw_chunk, None)
+                if chunk_model and chunk_model != "unknown":
+                    model_used = chunk_model
+                delta = self._extract_chunk_delta(raw_chunk)
+                if delta:
+                    accumulated_parts.append(delta)
+                accumulated = "".join(accumulated_parts)
+                yield CTStreamChunk(
+                    delta=delta,
+                    accumulated_content=accumulated,
+                    provider=self._provider,
+                    model=model_used,
+                    is_final=False,
+                    raw_chunk=raw_chunk,
+                )
+
+        elapsed = time.monotonic() - start_time
+        full_content = "".join(accumulated_parts)
+        self._last_model = model_used
+
+        interaction_count = 0
+        if self._config.log_requests:
+            interaction_count = self._provenance_log.get_interaction_count(
+                template=self._config.template,
+                kernel_name=self._kernel.name,
+                model=model_used,
+            )
+
+        div_result = await self._arun_divergence_engine(
+            message=message,
+            response=full_content,
+            interaction_count=interaction_count,
+            skip_l3=False,
+        )
+
+        sandbox_divergence = None
+        if self._staged_manager.has_active_staged():
+            stream_less_kwargs = {k: v for k, v in kwargs.items() if k != "stream"}
+            sandbox_divergence = await self._arun_shadow_requests(message, history, model, **stream_less_kwargs)
+
+        provenance_id = None
+        if self._config.log_requests:
+            provenance_id = self._provenance_log.record(
+                request_text=message,
+                response_text=full_content,
+                divergence_score=div_result.l1_score,
+                metadata={
+                    "provider": self._provider,
+                    "model": model_used,
+                    "elapsed_ms": round(elapsed * 1000, 2),
+                    "tier": div_result.tier.value,
+                    "template": self._config.template,
+                    "kernel": self._kernel.name,
+                    "drift_alert_enabled": self._config.drift_alert_callback is not None,
+                    "sandbox_divergence": sandbox_divergence,
+                    "stream": True,
+                    "async": True,
+                },
+            )
+
+        yield CTStreamChunk(
+            delta="",
+            accumulated_content=full_content,
+            provider=self._provider,
+            model=model_used,
+            is_final=True,
+            divergence_score=div_result.l1_score,
+            divergence_tier=div_result.tier.value,
+            provenance_id=provenance_id,
+            sandbox_divergence=sandbox_divergence,
+        )
+
     # ── Shadow Request Logic ──────────────────────────────────────────────────
 
     def _run_shadow_requests(
@@ -1039,6 +1415,54 @@ class TheseusWrapper:
             logger.warning(f"Shadow request for staged update failed: {e}")
             return None
 
+    async def _arun_shadow_requests(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None,
+        model: str | None,
+        **kwargs: Any,
+    ) -> float | None:
+        """Asynchronously runs interaction against staged (sandbox) kernels."""
+        active_staged = self._staged_manager.get_active()
+        if not active_staged:
+            return None
+
+        staged_record = active_staged[0]
+        sandbox_kernel = ConstitutionalKernel.from_dict(self._kernel.to_dict())
+        try:
+            sandbox_kernel.update_commitment(
+                staged_record.commitment_id,
+                staged_record.rule_text,
+            )
+        except Exception as e:
+            logger.error(f"Failed to apply staged rule to sandbox kernel: {e}")
+            return None
+
+        sandbox_system = sandbox_kernel.get_system_prompt_injection()
+        sandbox_messages = self._build_messages(message, history, sandbox_system)
+
+        try:
+            sandbox_response = await self._acall_provider(sandbox_messages, model=model, **kwargs)
+            sandbox_content = self._extract_content(sandbox_response)
+            sandbox_div_score = await self._identity_layer.acompute_divergence(sandbox_content)
+
+            if sandbox_div_score >= self._config.divergence_l3_threshold:
+                reason = f"Sandbox divergence L1 score {sandbox_div_score:.4f} exceeded L3 threshold."
+                self._staged_manager.reject_staged(staged_record.id, reason=reason)
+                raise CriticalSandboxDivergenceError(
+                    endorsement_id=staged_record.id,
+                    l1_score=sandbox_div_score,
+                    reason=reason,
+                )
+
+            return sandbox_div_score
+
+        except CriticalSandboxDivergenceError:
+            raise
+        except Exception as e:
+            logger.warning(f"Async shadow request for staged update failed: {e}")
+            return None
+
     def _process_staged_updates(self) -> None:
         """
         Checks for staged updates whose cooldown has expired and
@@ -1083,22 +1507,22 @@ class TheseusWrapper:
             return bool(os.environ.get("GOOGLE_API_KEY"))
         return False
 
-    def _call_provider(
+    def _prepare_provider_call(
         self,
         messages: list[dict[str, str]],
         model: str | None,
-        **kwargs: Any,
-    ) -> Any:
-        """Uses LiteLLM for unified provider calling."""
+        kwargs: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        """Prepares model name and kwargs for LiteLLM completion/acompletion."""
         if self._config.compression_passive_detection and self._shadow_history:
             if len(messages) < len(self._shadow_history) * 0.7:
                 self._compression_guard.on_passive_detection(
                     original=self._shadow_history,
-                    compressed=messages
+                    compressed=messages,
                 )
 
         self._shadow_history = list(messages)
-        
+
         if not model:
             if self._provider == "openai":
                 model = "gpt-4o-mini"
@@ -1110,47 +1534,72 @@ class TheseusWrapper:
                 model = "gpt-4o-mini"
 
         full_model = model
-        # Prevent colon-to-slash replacement if model already has ollama/ prefix 
-        # or if the provider is specifically ollama
         is_ollama = (self._provider == "ollama" or model.startswith("ollama/"))
 
         if ":" in model and not is_ollama:
-             full_model = model.replace(":", "/", 1)
+            full_model = model.replace(":", "/", 1)
         elif self._provider not in ("openai", "unknown") and not is_ollama:
-             if not model.startswith(f"{self._provider}/"):
-                  full_model = f"{self._provider}/{model}"
+            if not model.startswith(f"{self._provider}/"):
+                full_model = f"{self._provider}/{model}"
 
-        # Ensure ollama always has prefix if it has a colon
         if self._provider == "ollama" and ":" in model and not full_model.startswith("ollama/"):
-             full_model = f"ollama/{full_model}"
+            full_model = f"ollama/{full_model}"
 
+        call_kwargs = dict(kwargs)
         if hasattr(self._client, "base_url") and self._client.base_url:
             api_base = str(self._client.base_url).rstrip("/")
             if self._provider == "ollama" and api_base.endswith("/v1"):
                 new_base = api_base[:-3]
                 logger.debug(f"Stripping /v1 from Ollama api_base: {api_base} -> {new_base}")
                 api_base = new_base
-            kwargs["api_base"] = api_base
-            
+            call_kwargs["api_base"] = api_base
+
         if hasattr(self._client, "api_key") and self._client.api_key:
-            kwargs["api_key"] = self._client.api_key
+            call_kwargs["api_key"] = self._client.api_key
 
-        if hasattr(self._client, "timeout") and "timeout" not in kwargs:
-            kwargs["timeout"] = self._client.timeout
+        if hasattr(self._client, "timeout") and "timeout" not in call_kwargs:
+            call_kwargs["timeout"] = self._client.timeout
 
-        # Common role-aware policy resolution backed by the startup capability cache.
         policy = self.resolve_llm_policy(model=model)
         if not policy["effective"].get("tool_call", False):
-            kwargs.pop("tools", None)
-            kwargs.pop("tool_choice", None)
-            kwargs.pop("parallel_tool_calls", None)
+            call_kwargs.pop("tools", None)
+            call_kwargs.pop("tool_choice", None)
+            call_kwargs.pop("parallel_tool_calls", None)
 
+        return full_model, call_kwargs
+
+    def _call_provider(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None,
+        **kwargs: Any,
+    ) -> Any:
+        """Uses LiteLLM for unified provider calling."""
+        full_model, call_kwargs = self._prepare_provider_call(messages, model, kwargs)
         try:
-            raw = litellm.completion(model=full_model, messages=messages, **kwargs)
-            self._record_passive_capability_discovery(model=full_model, raw_response=raw)
+            raw = litellm.completion(model=full_model, messages=messages, **call_kwargs)
+            if not call_kwargs.get("stream"):
+                self._record_passive_capability_discovery(model=full_model, raw_response=raw)
             return raw
         except Exception as e:
             logger.error(f"litellm call failed: {e}")
+            raise
+
+    async def _acall_provider(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None,
+        **kwargs: Any,
+    ) -> Any:
+        """Uses LiteLLM for asynchronous unified provider calling."""
+        full_model, call_kwargs = self._prepare_provider_call(messages, model, kwargs)
+        try:
+            raw = await litellm.acompletion(model=full_model, messages=messages, **call_kwargs)
+            if not call_kwargs.get("stream"):
+                self._record_passive_capability_discovery(model=full_model, raw_response=raw)
+            return raw
+        except Exception as e:
+            logger.error(f"litellm async call failed: {e}")
             raise
 
     # ── Helper Methods ──────────────────────────────────────────────────────
@@ -1234,6 +1683,45 @@ class TheseusWrapper:
              
         return str(raw)
 
+    def _extract_chunk_delta(self, raw_chunk: Any) -> str:
+        """Extracts text delta from a streaming completion chunk."""
+        if isinstance(raw_chunk, str):
+            return raw_chunk
+        if isinstance(raw_chunk, dict):
+            choices = raw_chunk.get("choices")
+            if isinstance(choices, list) and choices:
+                choice0 = choices[0]
+                if isinstance(choice0, dict):
+                    delta = choice0.get("delta")
+                    if isinstance(delta, dict) and delta.get("content") is not None:
+                        return str(delta["content"])
+                    msg = choice0.get("message")
+                    if isinstance(msg, dict) and msg.get("content") is not None:
+                        return str(msg["content"])
+                    if choice0.get("text") is not None:
+                        return str(choice0["text"])
+            if "delta" in raw_chunk and isinstance(raw_chunk["delta"], str):
+                return raw_chunk["delta"]
+            return ""
+
+        try:
+            if hasattr(raw_chunk, "choices") and raw_chunk.choices:
+                choice = raw_chunk.choices[0]
+                if hasattr(choice, "delta") and choice.delta is not None:
+                    content = getattr(choice.delta, "content", None)
+                    if content is not None:
+                        return str(content)
+                if hasattr(choice, "message") and choice.message is not None:
+                    content = getattr(choice.message, "content", None)
+                    if content is not None:
+                        return str(content)
+                if hasattr(choice, "text") and choice.text is not None:
+                    return str(choice.text)
+        except Exception:
+            pass
+
+        return ""
+
     def _extract_model(self, raw: Any, fallback: str | None) -> str:
         if isinstance(raw, dict) and "model" in raw:
             model_name = raw["model"]
@@ -1254,6 +1742,17 @@ class TheseusWrapper:
             return DivergenceResult(
                 tier=DivergenceTier.OK,
                 summary=f"Engine execution failed: {e}"
+            )
+
+    async def _arun_divergence_engine(self, message: str, response: str, interaction_count: int = 0, skip_l3: bool = False) -> Any:
+        try:
+            return await self._divergence_engine.aanalyze(message, response, interaction_count, skip_l3=skip_l3)
+        except Exception as e:
+            logger.error(f"Async Divergence Engine execution failed: {e}")
+            from ct_toolkit.divergence.engine import DivergenceResult, DivergenceTier
+            return DivergenceResult(
+                tier=DivergenceTier.OK,
+                summary=f"Async Engine execution failed: {e}"
             )
 
     # ── Kernel Management ────────────────────────────────────────────────────────

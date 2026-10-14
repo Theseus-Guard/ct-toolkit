@@ -13,6 +13,7 @@ Design decisions:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -197,6 +198,61 @@ class LLMJudge:
         raise last_exception  # type: ignore[misc]
 
     @staticmethod
+    async def _acall_with_retry(kwargs: dict[str, Any]) -> Any:
+        """
+        Asynchronously call LLM with timeout and exponential backoff retry.
+        """
+        last_exception = None
+
+        for attempt in range(JUDGE_MAX_RETRIES + 1):
+            try:
+                kwargs.setdefault("timeout", JUDGE_TIMEOUT_SECONDS)
+                resp = await litellm.acompletion(**kwargs)
+                return resp
+
+            except litellm.exceptions.RateLimitError as e:
+                last_exception = e
+                if attempt < JUDGE_MAX_RETRIES:
+                    wait_time = JUDGE_RETRY_BACKOFF_FACTOR ** attempt
+                    logger.warning(
+                        f"Judge rate limited. Retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{JUDGE_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Judge rate limit exceeded after {JUDGE_MAX_RETRIES} retries")
+
+            except litellm.exceptions.Timeout as e:
+                last_exception = e
+                if attempt < JUDGE_MAX_RETRIES:
+                    wait_time = JUDGE_RETRY_BACKOFF_FACTOR ** attempt
+                    logger.warning(
+                        f"Judge request timed out. Retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{JUDGE_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Judge request timed out after {JUDGE_MAX_RETRIES} retries")
+
+            except litellm.exceptions.APIConnectionError as e:
+                last_exception = e
+                if attempt < JUDGE_MAX_RETRIES:
+                    wait_time = JUDGE_RETRY_BACKOFF_FACTOR ** attempt
+                    logger.warning(
+                        f"Judge API connection error. Retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{JUDGE_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Judge API connection failed after {JUDGE_MAX_RETRIES} retries")
+
+            except Exception as e:
+                logger.error(f"Judge non-retryable error: {type(e).__name__}: {e}")
+                raise
+
+        raise last_exception  # type: ignore[misc]
+
+    @staticmethod
     def _default_model(provider: str) -> str:
         defaults = {
             "openai":    "gpt-4o-mini",
@@ -205,15 +261,12 @@ class LLMJudge:
         }
         return defaults.get(provider, "gpt-4o-mini")
 
-    def evaluate(
+    def _prepare_eval_kwargs(
         self,
         request_text: str,
         response_text: str,
         kernel: Any,
-    ) -> JudgeResult:
-        """
-        Evaluates the response using raw text completion and JSON parsing only.
-        """
+    ) -> dict[str, Any]:
         kernel_rules = self._format_kernel_rules(kernel)
         # SECURITY: Split only the trusted template text and concatenate the
         # untrusted values. This avoids evaluating Jinja expressions in input
@@ -235,8 +288,6 @@ class LLMJudge:
         )
 
         full_model = self._model
-        # Prevent colon-to-slash replacement if model already has ollama/ prefix 
-        # or if the provider is specifically ollama
         is_ollama = (self._provider == "ollama" or self._model.startswith("ollama/"))
 
         if ":" in self._model and not is_ollama:
@@ -245,30 +296,40 @@ class LLMJudge:
              if not self._model.startswith(f"{self._provider}/"):
                   full_model = f"{self._provider}/{self._model}"
 
-        # Ensure ollama always has prefix if it has a colon
         if self._provider == "ollama" and ":" in self._model and not full_model.startswith("ollama/"):
              full_model = f"ollama/{full_model}"
 
+        kwargs: dict[str, Any] = {
+            "model": full_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": 256,
+            "temperature": 0.0,
+            "timeout": JUDGE_TIMEOUT_SECONDS,
+        }
+
+        kwargs.update(self._tool_call_guard_kwargs())
+
+        if self._api_base:
+            kwargs["api_base"] = self._api_base
+        if self._api_key:
+            kwargs["api_key"] = self._api_key
+
+        return kwargs
+
+    def evaluate(
+        self,
+        request_text: str,
+        response_text: str,
+        kernel: Any,
+    ) -> JudgeResult:
+        """
+        Evaluates the response using raw text completion and JSON parsing only.
+        """
         try:
-            kwargs: dict[str, Any] = {
-                "model": full_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "max_tokens": 256,
-                "temperature": 0.0,
-                "timeout": JUDGE_TIMEOUT_SECONDS,
-            }
-
-            kwargs.update(self._tool_call_guard_kwargs())
-
-            if self._api_base:
-                kwargs["api_base"] = self._api_base
-            if self._api_key:
-                kwargs["api_key"] = self._api_key
-
-            # Use retry logic for resilient API calls
+            kwargs = self._prepare_eval_kwargs(request_text, response_text, kernel)
             resp = self._call_with_retry(kwargs)
             data = self._parse_response(resp)
             
@@ -286,6 +347,40 @@ class LLMJudge:
             return result
         except Exception as e:
             logger.warning(f"L2 Judge evaluation failed after retries: {type(e).__name__}. Falling back.")
+            return JudgeResult(
+                verdict=JudgeVerdict.UNCERTAIN,
+                confidence=0.0,
+                reason=_FALLBACK_REASON,
+            )
+
+    async def aevaluate(
+        self,
+        request_text: str,
+        response_text: str,
+        kernel: Any,
+    ) -> JudgeResult:
+        """
+        Asynchronously evaluates the response using raw text completion and JSON parsing.
+        """
+        try:
+            kwargs = self._prepare_eval_kwargs(request_text, response_text, kernel)
+            resp = await self._acall_with_retry(kwargs)
+            data = self._parse_response(resp)
+
+            result = JudgeResult(
+                verdict=data.verdict,
+                confidence=data.confidence,
+                reason=data.reason,
+                raw_response=resp,
+            )
+
+            logger.info(
+                f"L2 Judge async result: verdict={result.verdict} | "
+                f"confidence={result.confidence:.2f}"
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"L2 Judge async evaluation failed after retries: {type(e).__name__}. Falling back.")
             return JudgeResult(
                 verdict=JudgeVerdict.UNCERTAIN,
                 confidence=0.0,

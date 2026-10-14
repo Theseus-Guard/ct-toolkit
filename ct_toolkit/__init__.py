@@ -12,7 +12,7 @@ Identity Continuity Guardrails for LLM Systems.
     print(response.content)
     print(response.divergence_score)
 """
-from ct_toolkit.core.wrapper import TheseusWrapper, WrapperConfig, CTResponse
+from ct_toolkit.core.wrapper import TheseusWrapper, WrapperConfig, CTResponse, CTStreamChunk
 from ct_toolkit.core.kernel import ConstitutionalKernel
 from ct_toolkit.core.compatibility import CompatibilityLayer
 from ct_toolkit.core.exceptions import (
@@ -29,6 +29,7 @@ __all__ = [
     "TheseusWrapper",
     "WrapperConfig",
     "CTResponse",
+    "CTStreamChunk",
     "ConstitutionalKernel",
     "CompatibilityLayer",
     "AxiomaticViolationError",

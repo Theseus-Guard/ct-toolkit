@@ -125,8 +125,8 @@ async def _handle_post_call(request: GuardrailRequest) -> GuardrailResponse:
             model=model,
         )
 
-    # Run Divergence Engine
-    div_result = _wrapper_instance._run_divergence_engine(
+    # Run Divergence Engine asynchronously
+    div_result = await _wrapper_instance._arun_divergence_engine(
         message=user_text,
         response=response_text,
         interaction_count=interaction_count,
