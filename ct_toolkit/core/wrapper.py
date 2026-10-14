@@ -21,6 +21,8 @@ In the background:
 """
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_futures
 import time
 import os
 import re
@@ -33,6 +35,7 @@ import yaml
 
 from ct_toolkit.core.kernel import ConstitutionalKernel
 from ct_toolkit.core.compatibility import CompatibilityLayer, CompatibilityResult
+from ct_toolkit.core.circuit_breaker import CircuitBreaker, CircuitBreakerError, CircuitState
 from ct_toolkit.core.exceptions import (
     MissingClientError, 
     CriticalSandboxDivergenceError
@@ -103,6 +106,12 @@ class WrapperConfig:
     endorsement_cooldown_base: int = CooldownCalculator.DEFAULT_BASE_SECONDS
     endorsement_cooldown_max: int = CooldownCalculator.DEFAULT_MAX_SECONDS
     endorsement_no_probe_penalty: int = CooldownCalculator.DEFAULT_NO_PROBE_PENALTY_S
+
+    # -- Background Execution & Circuit Breaker --
+    shadow_background: bool = False
+    l3_background: bool = False
+    circuit_breaker_on_critical: bool = True
+    circuit_breaker_recovery_timeout: float = 300.0
 
 
 @dataclass
@@ -236,6 +245,18 @@ class TheseusWrapper:
             template=self._config.template,
             kernel=self._config.kernel_name,
         )
+
+        # ── Background Executor & Circuit Breaker ──
+        self._bg_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ct_shadow_bg")
+        self._background_futures: list[Future[Any]] = []
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._last_background_error: Exception | None = None
+        self._circuit_breaker = CircuitBreaker(
+            name="theseus_guard_breaker",
+            failure_threshold=1,
+            recovery_timeout=self._config.circuit_breaker_recovery_timeout,
+        )
+
         self._provenance_log = self._init_provenance_log()
         self._identity_layer = self._init_identity_layer()
         self._divergence_engine = self._init_divergence_engine()
@@ -881,7 +902,70 @@ class TheseusWrapper:
             project_root=self._project_root,
             provenance_log=self._provenance_log,
             policy_resolver=self.resolve_llm_policy,
+            l3_background=self._config.l3_background,
+            on_critical_callback=self._on_critical_l3_report,
         )
+
+    def _on_critical_l3_report(self, report: Any) -> None:
+        """Callback invoked when L3 ICM detects an unhealthy/critical state."""
+        if self._config.circuit_breaker_on_critical:
+            self._circuit_breaker.record_failure()
+        if self._config.drift_alert_callback:
+            try:
+                self._config.drift_alert_callback({
+                    "event": "l3_critical",
+                    "health_score": getattr(report, "health_score", None),
+                    "risk_level": getattr(report, "risk_level", None),
+                    "critical_failures": getattr(report, "critical_failures", []),
+                })
+            except Exception as exc:
+                logger.warning(f"drift_alert_callback error: {exc}")
+
+    def _check_circuit_breaker(self) -> None:
+        """Raises CircuitBreakerError if circuit breaker has been tripped by a critical violation."""
+        if not self._config.circuit_breaker_on_critical:
+            return
+        engine_tripped = getattr(self._divergence_engine, "circuit_breaker_tripped", False)
+        if not self._circuit_breaker.allow_request() or engine_tripped:
+            state = self._circuit_breaker.state if not self._circuit_breaker.allow_request() else CircuitState.OPEN
+            retry_after = self._circuit_breaker.time_until_recovery()
+            raise CircuitBreakerError(state, retry_after)
+
+    def reset_circuit_breaker(self) -> None:
+        """Resets the wrapper and divergence engine circuit breakers."""
+        self._circuit_breaker.reset()
+        if hasattr(self._divergence_engine, "reset_circuit_breaker"):
+            self._divergence_engine.reset_circuit_breaker()
+        self._last_background_error = None
+
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        """Returns the wrapper's circuit breaker instance."""
+        return self._circuit_breaker
+
+    @property
+    def last_background_error(self) -> Exception | None:
+        """Returns the last error raised by a background shadow task, if any."""
+        return self._last_background_error
+
+    def wait_for_background_tasks(self, timeout: float = 5.0) -> None:
+        """Waits for pending background shadow requests and L3 ICM futures to finish."""
+        if self._background_futures:
+            _, not_done = wait_futures(self._background_futures, timeout=timeout)
+            self._background_futures = list(not_done)
+        if hasattr(self._divergence_engine, "wait_for_background_l3"):
+            self._divergence_engine.wait_for_background_l3(timeout=timeout)
+
+    async def await_background_tasks(self, timeout: float = 5.0) -> None:
+        """Asynchronously waits for pending background shadow tasks and L3 ICM tasks."""
+        if self._background_tasks:
+            tasks_snapshot = list(self._background_tasks)
+            await asyncio.wait(tasks_snapshot, timeout=timeout)
+        if self._background_futures:
+            _, not_done = wait_futures(self._background_futures, timeout=timeout)
+            self._background_futures = list(not_done)
+        if hasattr(self._divergence_engine, "await_background_l3"):
+            await self._divergence_engine.await_background_l3(timeout=timeout)
 
     def _log_init(self) -> None:
         compat_note = (
@@ -922,6 +1006,7 @@ class TheseusWrapper:
             )
 
         # --- Pre-flight Checks ---
+        self._check_circuit_breaker()
         self._integrity_monitor.verify_integrity()
         self._process_staged_updates()
 
@@ -984,7 +1069,10 @@ class TheseusWrapper:
         # --- Staged Approval Monitoring (Shadow Requests) ---
         sandbox_divergence = None
         if self._staged_manager.has_active_staged():
-            sandbox_divergence = self._run_shadow_requests(message, history, model, **kwargs)
+            if self._config.shadow_background:
+                self._schedule_background_shadow(message, history, model, **kwargs)
+            else:
+                sandbox_divergence = self._run_shadow_requests(message, history, model, **kwargs)
 
         # Provenance Log record
         provenance_id = None
@@ -1039,6 +1127,7 @@ class TheseusWrapper:
                 **kwargs,
             )
 
+        self._check_circuit_breaker()
         self._integrity_monitor.verify_integrity()
         self._process_staged_updates()
 
@@ -1098,7 +1187,10 @@ class TheseusWrapper:
 
         sandbox_divergence = None
         if self._staged_manager.has_active_staged():
-            sandbox_divergence = await self._arun_shadow_requests(message, history, model, **kwargs)
+            if self._config.shadow_background:
+                self._schedule_async_background_shadow(message, history, model, **kwargs)
+            else:
+                sandbox_divergence = await self._arun_shadow_requests(message, history, model, **kwargs)
 
         provenance_id = None
         if self._config.log_requests:
@@ -1144,6 +1236,7 @@ class TheseusWrapper:
         divergence analysis and provenance logging.
         Yields a final CTStreamChunk with is_final=True containing divergence metadata.
         """
+        self._check_circuit_breaker()
         self._integrity_monitor.verify_integrity()
         self._process_staged_updates()
 
@@ -1204,7 +1297,10 @@ class TheseusWrapper:
         sandbox_divergence = None
         if self._staged_manager.has_active_staged():
             stream_less_kwargs = {k: v for k, v in kwargs.items() if k != "stream"}
-            sandbox_divergence = self._run_shadow_requests(message, history, model, **stream_less_kwargs)
+            if self._config.shadow_background:
+                self._schedule_background_shadow(message, history, model, **stream_less_kwargs)
+            else:
+                sandbox_divergence = self._run_shadow_requests(message, history, model, **stream_less_kwargs)
 
         provenance_id = None
         if self._config.log_requests:
@@ -1251,6 +1347,7 @@ class TheseusWrapper:
         post-stream divergence analysis and provenance logging.
         Yields a final CTStreamChunk with is_final=True containing divergence metadata.
         """
+        self._check_circuit_breaker()
         self._integrity_monitor.verify_integrity()
         self._process_staged_updates()
 
@@ -1329,7 +1426,10 @@ class TheseusWrapper:
         sandbox_divergence = None
         if self._staged_manager.has_active_staged():
             stream_less_kwargs = {k: v for k, v in kwargs.items() if k != "stream"}
-            sandbox_divergence = await self._arun_shadow_requests(message, history, model, **stream_less_kwargs)
+            if self._config.shadow_background:
+                self._schedule_async_background_shadow(message, history, model, **stream_less_kwargs)
+            else:
+                sandbox_divergence = await self._arun_shadow_requests(message, history, model, **stream_less_kwargs)
 
         provenance_id = None
         if self._config.log_requests:
@@ -1364,6 +1464,58 @@ class TheseusWrapper:
         )
 
     # ── Shadow Request Logic ──────────────────────────────────────────────────
+
+    def _schedule_background_shadow(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None,
+        model: str | None,
+        **kwargs: Any,
+    ) -> Future[float | None]:
+        """Schedules _run_shadow_requests in a background thread without blocking main call."""
+        def _task() -> float | None:
+            try:
+                return self._run_shadow_requests(message, history, model, **kwargs)
+            except CriticalSandboxDivergenceError as exc:
+                self._last_background_error = exc
+                if self._config.circuit_breaker_on_critical:
+                    self._circuit_breaker.record_failure()
+                logger.error(f"Background shadow request detected critical divergence: {exc}")
+                return exc.l1_score
+            except Exception as exc:
+                logger.warning(f"Background shadow request error: {exc}")
+                return None
+
+        future = self._bg_executor.submit(_task)
+        self._background_futures = [f for f in self._background_futures if not f.done()]
+        self._background_futures.append(future)
+        return future
+
+    def _schedule_async_background_shadow(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None,
+        model: str | None,
+        **kwargs: Any,
+    ) -> asyncio.Task[float | None]:
+        """Schedules _arun_shadow_requests as a background asyncio task."""
+        async def _atask() -> float | None:
+            try:
+                return await self._arun_shadow_requests(message, history, model, **kwargs)
+            except CriticalSandboxDivergenceError as exc:
+                self._last_background_error = exc
+                if self._config.circuit_breaker_on_critical:
+                    self._circuit_breaker.record_failure()
+                logger.error(f"Async background shadow request detected critical divergence: {exc}")
+                return exc.l1_score
+            except Exception as exc:
+                logger.warning(f"Async background shadow request error: {exc}")
+                return None
+
+        task = asyncio.create_task(_atask())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     def _run_shadow_requests(
         self,

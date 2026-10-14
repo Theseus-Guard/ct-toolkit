@@ -14,6 +14,8 @@ action is taken based on the total score.
 """
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_futures
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -119,6 +121,8 @@ class DivergenceEngine:
         provenance_log: Any | None = None, 
         project_root: Path | None = None,
         policy_resolver: Callable[[str | None, str | None], dict[str, Any]] | None = None,
+        l3_background: bool = False,
+        on_critical_callback: Callable[[ICMReport], None] | None = None,
     ) -> None:
         self._identity = identity_layer
         self._kernel = kernel
@@ -129,6 +133,8 @@ class DivergenceEngine:
         self._log = provenance_log
         self._project_root = project_root
         self._policy_resolver = policy_resolver
+        self._l3_background = l3_background
+        self._on_critical_callback = on_critical_callback
         
         # Base thresholds
         self._base_l1_threshold = l1_threshold
@@ -149,6 +155,95 @@ class DivergenceEngine:
         
         # Analyzer for longitudinal drift
         self._analyzer = PolicyDriftAnalyzer(provenance_log) if provenance_log else None
+
+        # Background execution and circuit breaker state
+        self._circuit_breaker_tripped: bool = False
+        self._last_l3_report: ICMReport | None = None
+        self._bg_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ct_l3_bg")
+        self._pending_futures: list[Future[ICMReport]] = []
+        self._pending_tasks: set[asyncio.Task[ICMReport]] = set()
+
+    @property
+    def circuit_breaker_tripped(self) -> bool:
+        """True if a critical L3 report tripped the engine's circuit breaker flag."""
+        return self._circuit_breaker_tripped
+
+    @property
+    def last_l3_report(self) -> ICMReport | None:
+        """Returns the most recently completed L3 ICM report."""
+        return self._last_l3_report
+
+    def reset_circuit_breaker(self) -> None:
+        """Resets the circuit breaker flag."""
+        self._circuit_breaker_tripped = False
+
+    def _handle_l3_report(self, report: ICMReport) -> None:
+        """Records L3 report and trips circuit breaker if unhealthy."""
+        self._last_l3_report = report
+        if not report.is_healthy:
+            self._circuit_breaker_tripped = True
+            logger.error(
+                f"Critical L3 ICM failure detected (health={report.health_score:.1%}). "
+                f"Circuit breaker flag tripped."
+            )
+            if self._on_critical_callback:
+                try:
+                    self._on_critical_callback(report)
+                except Exception as exc:
+                    logger.warning(f"on_critical_callback error: {exc}")
+
+    def _schedule_background_l3(self, max_probes: int | None = None) -> Future[ICMReport]:
+        """Schedules L3 ICM runner in background thread pool."""
+        def _task() -> ICMReport:
+            report = self._run_l3(max_probes=max_probes)
+            self._handle_l3_report(report)
+            return report
+
+        future = self._bg_executor.submit(_task)
+        self._pending_futures = [f for f in self._pending_futures if not f.done()]
+        self._pending_futures.append(future)
+        return future
+
+    def _schedule_async_background_l3(self, max_probes: int | None = None) -> asyncio.Task[ICMReport]:
+        """Schedules async L3 ICM runner as a background asyncio task."""
+        async def _atask() -> ICMReport:
+            report = await self._arun_l3(max_probes=max_probes)
+            self._handle_l3_report(report)
+            return report
+
+        task = asyncio.create_task(_atask())
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+        return task
+
+    def wait_for_background_l3(self, timeout: float = 5.0) -> list[ICMReport]:
+        """Waits for pending background L3 futures to complete and returns their reports."""
+        if not self._pending_futures:
+            return []
+        done, not_done = wait_futures(self._pending_futures, timeout=timeout)
+        self._pending_futures = list(not_done)
+        reports: list[ICMReport] = []
+        for f in done:
+            try:
+                reports.append(f.result())
+            except Exception as exc:
+                logger.warning(f"Background L3 task raised error: {exc}")
+        return reports
+
+    async def await_background_l3(self, timeout: float = 5.0) -> list[ICMReport]:
+        """Asynchronously waits for pending background L3 tasks and futures."""
+        reports: list[ICMReport] = []
+        if self._pending_tasks:
+            tasks_snapshot = list(self._pending_tasks)
+            done, _ = await asyncio.wait(tasks_snapshot, timeout=timeout)
+            for t in done:
+                try:
+                    reports.append(t.result())
+                except Exception as exc:
+                    logger.warning(f"Async background L3 task raised error: {exc}")
+        if self._pending_futures:
+            reports.extend(self.wait_for_background_l3(timeout=timeout))
+        return reports
 
     # ── Main Analysis ─────────────────────────────────────────────────────────────
 
@@ -283,7 +378,22 @@ class DivergenceEngine:
                 summary="L2 problematic, L3 not available",
             )
 
+        if self._l3_background:
+            self._schedule_background_l3()
+            return DivergenceResult(
+                tier=DivergenceTier.L3_ICM,
+                l1_score=l1_score,
+                l2_verdict=l2_result.verdict,
+                l2_confidence=l2_result.confidence,
+                l2_reason=l2_result.reason,
+                l3_report=None,
+                action_required=False,
+                cascade_blocked=l1_score >= self._l3_threshold,
+                summary="L3 ICM scheduled in background",
+            )
+
         l3_report = self._run_l3()
+        self._handle_l3_report(l3_report)
         tier = DivergenceTier.CRITICAL if not l3_report.is_healthy else DivergenceTier.L3_ICM
 
         return DivergenceResult(
@@ -372,7 +482,22 @@ class DivergenceEngine:
                 summary="L2 problematic, L3 not available",
             )
 
+        if self._l3_background:
+            self._schedule_async_background_l3()
+            return DivergenceResult(
+                tier=DivergenceTier.L3_ICM,
+                l1_score=l1_score,
+                l2_verdict=l2_result.verdict,
+                l2_confidence=l2_result.confidence,
+                l2_reason=l2_result.reason,
+                l3_report=None,
+                action_required=False,
+                cascade_blocked=l1_score >= self._l3_threshold,
+                summary="L3 ICM scheduled in background",
+            )
+
         l3_report = await self._arun_l3()
+        self._handle_l3_report(l3_report)
         tier = DivergenceTier.CRITICAL if not l3_report.is_healthy else DivergenceTier.L3_ICM
 
         return DivergenceResult(
@@ -405,7 +530,11 @@ class DivergenceEngine:
 
         l3_report = None
         if self._l3_available and not skip_l3:
-            l3_report = self._run_l3(max_probes=5)  # Fast subset in Enterprise
+            if self._l3_background:
+                self._schedule_background_l3(max_probes=5)
+            else:
+                l3_report = self._run_l3(max_probes=5)  # Fast subset in Enterprise
+                self._handle_l3_report(l3_report)
 
         # Calculate total risk score
         risk_score = l1_score
@@ -416,7 +545,7 @@ class DivergenceEngine:
 
         action_required = (
             risk_score >= self._l3_threshold
-            or (l3_report and not l3_report.is_healthy)
+            or (l3_report is not None and not l3_report.is_healthy)
         )
 
         tier = DivergenceTier.CRITICAL if action_required else DivergenceTier.L2_JUDGE
@@ -428,8 +557,8 @@ class DivergenceEngine:
             l2_confidence=l2_result.confidence if l2_result else None,
             l2_reason=l2_result.reason if l2_result else None,
             l3_report=l3_report,
-            action_required=action_required,
-            cascade_blocked=action_required,
+            action_required=bool(action_required),
+            cascade_blocked=bool(action_required),
             summary=f"Enterprise analysis | risk_score={risk_score:.4f}",
         )
 
@@ -448,7 +577,11 @@ class DivergenceEngine:
 
         l3_report = None
         if self._l3_available and not skip_l3:
-            l3_report = await self._arun_l3(max_probes=5)
+            if self._l3_background:
+                self._schedule_async_background_l3(max_probes=5)
+            else:
+                l3_report = await self._arun_l3(max_probes=5)
+                self._handle_l3_report(l3_report)
 
         risk_score = l1_score
         if l2_result and l2_result.verdict == JudgeVerdict.MISALIGNED:
@@ -458,7 +591,7 @@ class DivergenceEngine:
 
         action_required = (
             risk_score >= self._l3_threshold
-            or (l3_report and not l3_report.is_healthy)
+            or (l3_report is not None and not l3_report.is_healthy)
         )
 
         tier = DivergenceTier.CRITICAL if action_required else DivergenceTier.L2_JUDGE
@@ -470,7 +603,7 @@ class DivergenceEngine:
             l2_confidence=l2_result.confidence if l2_result else None,
             l2_reason=l2_result.reason if l2_result else None,
             l3_report=l3_report,
-            action_required=action_required,
+            action_required=bool(action_required),
             cascade_blocked=bool(action_required),
             summary=f"Enterprise analysis | risk_score={risk_score:.4f}",
         )
