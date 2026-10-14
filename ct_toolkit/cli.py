@@ -95,7 +95,7 @@ BANNER = r"""
 
 def show_banner():
     console.print(f"[bold cyan]{BANNER}[/bold cyan]")
-    console.print(f"[bold white]  Computatonal Theseus Toolkit (CT Toolkit) v{__version__}[/bold white]")
+    console.print(f"[bold white]  Computational Theseus Toolkit (CT Toolkit) v{__version__}[/bold white]")
     console.print("[dim]  Identity Continuity Guardrails for Agentic Systems[/dim]\n")
 
 def version_callback(value: bool):

@@ -11,6 +11,47 @@
 
 CT Toolkit is an open-source security layer designed to preserve the **identity continuity** of AI agents over time. It implements the **Nested Agentic Architecture (NAA)** framework to prevent **Sequential Self-Compression (SSC)** in multi-agent hierarchies.
 
+```text
+$ ct-toolkit status
+
+  _______ _    _ ______  _____ ______ _    _  _____    _____ _    _          _____  _____  
+ |__   __| |  | |  ____|/ ____|  ____| |  | |/ ____|  / ____| |  | |   /\   |  __ \|  __ \ 
+    | |  | |__| | |__  | (___ | |__  | |  | | (___   | |  __| |  | |  /  \  | |__) | |  | |
+    | |  |  __  |  __|  \___ \|  __| | |  | |\___ \  | | |_ | |  | | / /\ \ |  _  /| |  | |
+    | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
+    |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
+
+  Computational Theseus Toolkit (CT Toolkit) v0.3.40
+  Identity Continuity Guardrails for Agentic Systems
+
+╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
+│ Vault: ./ct_provenance.db (local)                                            │
+│ Chain Integrity: VALID (HMAC Verified)                                       │
+│ Verified Active Entries: 4 (showing last 4)                                  │
+│ Divergence Score (Avg / Max): 0.1525 / 0.3800                                │
+│ Head Hash: 9c64cb51a479c52c207b7fa8c3197a75...                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+    Divergence Tier Breakdown (L1 / L2 / L3)    
+┏━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ Tier       ┃ Count ┃ Share ┃
+┡━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ OK         │     1 │ 33.3% │
+│ L1_WARNING │     1 │ 33.3% │
+│ L2_JUDGE   │     1 │ 33.3% │
+│ L3_ICM     │     0 │  0.0% │
+└────────────┴───────┴───────┘
+
+                     Staged Kernel Rules (Sandbox Cooldown)                     
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┓
+┃ Endorsement ID ┃ Commitment       ┃ Rule Text          ┃ Status              ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━┩
+│ end-9f8a7b6c   │ fin_integrity_01 │ Require dual       │ ACTIVE COOLDOWN     │
+│                │                  │ sign-off for       │ (1799s left)        │
+│                │                  │ adjustments > $10k │                     │
+└────────────────┴──────────────────┴────────────────────┴─────────────────────┘
+```
+
 ---
 
 ## 📖 Official Documentation
@@ -28,21 +69,25 @@ For full API reference, architecture details, examples, and integration guides, 
 
 In complex agentic workflows, LLMs tend to "drift" from their original instructions. CT Toolkit provides the mathematical and cryptographic guardrails to ensure your agents remain aligned with their core constitution, even across deep hierarchies.
 
+- **Async & Streaming Guardrails (`achat`)**: Native `async/await` and streaming (`stream=True`) support with non-blocking background execution for shadow requests and L3 ICM probes.
+- **Contrastive Semantic L1 Engine**: Provider-independent embeddings (`litellm`, `ollama`, local `fastembed`) with positive/negative anchor analysis and semantic rule conflict detection.
 - **Staged Approval (Cooldown)**: Verify risky kernel updates in a sandbox via shadow requests before production promotion.
 - **Passive Context Compression Detection**: Automatically detects silent provider-side history compression (e.g., OpenAI/Anthropic).
-- **Constitutional Kernels**: Axiomatic identity anchors.
-- **Standalone Auditor CLI**: Rapidly audit any LLM endpoint for identity drift without writing code.
+- **Constitutional Kernels & Distributed Propagation**: Axiomatic identity anchors with HMAC-SHA256 signed HTTP header propagation (`propagate_headers` / `from_headers`).
+- **Standalone Auditor & Status CLI**: Rapidly audit any LLM endpoint (`ct-toolkit audit`) and inspect provenance integrity & divergence tiers (`ct-toolkit status` / `dashboard`).
 - **Autonomous Self-Correction**: Active L2->L1 feedback loop that retries and corrects divergent responses before they reach the user.
-- **Divergence Engine**: Multi-tiered drift analysis (L1/L2/L3).
-- **Hierarchical Propagation**: Mother-to-child constraint inheritance.
-- **Provenance Log**: Immutable HMAC-signed interaction history.
+- **Enterprise Provenance & Observability**: Immutable HMAC-signed hash chain supporting SQLite and PostgreSQL/SQLAlchemy with paginated verification and OpenTelemetry (OTel) spans/metrics.
 
 ---
 
 ## Quick Start
 
 ```bash
+# Core lightweight install
 pip install ct-toolkit
+
+# Or install with optional extras (cli, server, enterprise, embeddings, observability, all)
+pip install "ct-toolkit[all]"
 ```
 
 ```python
@@ -54,18 +99,21 @@ config = WrapperConfig(compression_passive_detection=True)
 # One-line injection for any LLM provider
 client = TheseusWrapper(provider="openai", config=config)
 
-# Guardrails and drift analysis applied automatically
+# Sync or async (`await client.achat(...)`) with automatic drift analysis
 response = client.chat("What are your core security axioms?")
 
 print(response.content)
 print(f"Divergence Score: {response.divergence_score}")
 ```
 
-### 🔍 Standalone Auditor (CLI)
+### 🔍 Standalone Auditor & Dashboard (CLI)
 
-Audit any LLM endpoint (OpenAI, Ollama, LM Studio) directly from your terminal:
+Audit any LLM endpoint (OpenAI, Ollama, LM Studio) and inspect your provenance chain directly from your terminal:
 
 ```bash
+# View Provenance Chain integrity, L1/L2/L3 tier breakdown, and staged rules
+ct-toolkit status --vault ./ct_provenance.db
+
 # Audit a local Ollama model
 ct-toolkit audit --url http://localhost:11434/v1 --kernel defense
 
@@ -93,10 +141,9 @@ The L2 judge does not evaluate Jinja2 expressions in user requests or model resp
 
 | Metric           | Status                                                                                                                                                                                                              |
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Tests**        | ✅ 397 passed, 3 skipped (100% success rate, 90% coverage)                                                                                                                                                          |
+| **Tests**        | ✅ 425 passed, 3 skipped (100% success rate, 90%+ coverage)                                                                                                                                                         |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
 | **Last Phase**   | ✅ v0.3.40: fsspec 2026.9.0 fixes ReferenceFileSystem template-injection RCE and multidict 6.9.1 fixes items-view reference leak (Dependabot #72/#73)                                                     |
-| **Current Goal** | 🔶 Phase 7: Multi-Agent Synchronization (Integration)                                                                                                                                                               |
 
 ### Framework & Model Support
 
