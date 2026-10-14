@@ -123,6 +123,10 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
 
 ---
 
+<div class="ct-two-col" markdown>
+
+<div markdown>
+
 ## Existing guardrails aren't enough
 
 |                               | Llama-Guard / Rule Engines | **CT Toolkit**                                |
@@ -135,7 +139,9 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
 
 [:octicons-arrow-right-24: Read the full rationale](concepts/why-ct-toolkit.md)
 
----
+</div>
+
+<div markdown>
 
 ## Project status
 
@@ -150,3 +156,7 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
 | **Python**    | 3.11+                                                                                                                                                                                                               |
 
 [:octicons-arrow-right-24: Full roadmap and status](reference/project-status.md)
+
+</div>
+
+</div>
