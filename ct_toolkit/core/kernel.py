@@ -177,12 +177,97 @@ class ConstitutionalKernel:
             if self._conflicts_with(normalized_rule, commitment.keywords):
                 raise PlasticConflictError(rule=rule_text, commitment=commitment.id)
 
+    _RULE_SYNONYM_MAP: dict[str, str] = {
+        "disable": "disable",
+        "deactivate": "disable",
+        "remove": "disable",
+        "suppress": "disable",
+        "eliminate": "disable",
+        "oversight": "oversight",
+        "monitoring": "oversight",
+        "supervision": "oversight",
+        "human": "human",
+        "operator": "human",
+        "auditor": "human",
+        "bypass": "bypass",
+        "evade": "bypass",
+        "circumvent": "bypass",
+        "skip": "bypass",
+        "ignore": "ignore",
+        "disregard": "ignore",
+        "forget": "ignore",
+        "abandon": "ignore",
+        "override": "override",
+        "overwrite": "override",
+        "previous": "previous",
+        "initial": "previous",
+        "prior": "previous",
+        "original": "previous",
+        "values": "values",
+        "rules": "values",
+        "instructions": "values",
+        "principles": "values",
+        "constitution": "values",
+        "identity": "identity",
+        "persona": "identity",
+        "deceive": "deceive",
+        "mislead": "deceive",
+        "trick": "deceive",
+        "falsify": "deceive",
+        "manipulate": "manipulate",
+        "tamper": "manipulate",
+        "forge": "manipulate",
+        "alter": "manipulate",
+        "log": "log",
+        "logs": "log",
+        "provenance": "log",
+        "audit": "log",
+        "false": "false",
+        "fake": "false",
+        "fabricated": "false",
+        "report": "report",
+        "hide": "hide",
+        "conceal": "hide",
+        "mask": "hide",
+        "behavior": "behavior",
+        "actions": "behavior",
+        "activity": "behavior",
+        "endorsement": "endorsement",
+        "approval": "approval",
+        "authorization": "approval",
+        "validation": "validation",
+        "verification": "validation",
+        "allow": "allow",
+        "permit": "allow",
+        "enable": "allow",
+        "harmful": "harmful",
+        "dangerous": "harmful",
+        "malicious": "harmful",
+        "unsafe": "harmful",
+        "harm": "harmful",
+        "safety": "harmful",
+        "filter": "filter",
+        "filters": "filter",
+        "guardrail": "filter",
+        "guardrails": "filter",
+        "aggressive": "aggressive",
+        "hostile": "aggressive",
+        "insulting": "aggressive",
+        "abusive": "aggressive",
+        "rude": "aggressive",
+        "tone": "tone",
+        "communication": "tone",
+        "style": "tone",
+    }
+
+    _STOPWORDS: set[str] = {"from", "the", "and", "for", "with", "without", "to", "of", "in", "on"}
+
     def _conflicts_with(self, rule_text: str, keywords: list) -> bool:
         # SECURITY: Match complete Unicode words rather than arbitrary
-        # substrings. This prevents both false positives such as "deceivingly"
-        # matching "deceive" and simple bypasses that append characters to a
-        # configured keyword. NFKC/casefold normalization is done before this
-        # method is called so visually equivalent input is treated consistently.
+        # substrings, plus canonical synonym/paraphrase concept matching.
+        rule_words = re.findall(r"\w+", rule_text, flags=re.UNICODE)
+        rule_concepts = {self._RULE_SYNONYM_MAP.get(w, w) for w in rule_words}
+
         for kw in keywords:
             if not isinstance(kw, str) or not kw.strip():
                 continue
@@ -190,6 +275,22 @@ class ConstitutionalKernel:
             kw_escaped = re.escape(normalized_keyword)
             if re.search(rf"(?<!\w){kw_escaped}(?!\w)", rule_text, flags=re.UNICODE):
                 return True
+
+            # Semantic / paraphrase concept check
+            kw_words = [
+                w for w in re.findall(r"\w+", normalized_keyword, flags=re.UNICODE)
+                if w not in self._STOPWORDS
+            ]
+            if not kw_words:
+                continue
+            if len(kw_words) == 1:
+                kw_concept = self._RULE_SYNONYM_MAP.get(kw_words[0], kw_words[0])
+                if kw_words[0] in self._RULE_SYNONYM_MAP and kw_concept in rule_concepts:
+                    return True
+            else:
+                kw_concepts = {self._RULE_SYNONYM_MAP.get(w, w) for w in kw_words}
+                if len(kw_concepts) >= 2 and kw_concepts.issubset(rule_concepts):
+                    return True
         return False
 
     def update_commitment(self, commitment_id: str, new_value: Any) -> None:

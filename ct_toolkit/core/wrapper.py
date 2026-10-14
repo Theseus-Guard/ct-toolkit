@@ -70,6 +70,8 @@ class WrapperConfig:
     judge_provider: str | None = None # Explicit provider for L2/L3 judge (e.g. "ollama")
     embedding_client: Any = None     # Client for L1 ECS embedding (falls back to main client if compatible)
     embedding_model: str = "text-embedding-3-small"
+    embedding_provider: str | None = None
+    use_fastembed: bool = False
     rigorous_mode: bool | None = None # Preferred name for running all tiers every call
     enterprise_mode: bool = False    # Deprecated alias for rigorous_mode
     parent_kernel: ConstitutionalKernel | None = None  # Propagated from mother agent
@@ -826,9 +828,14 @@ class TheseusWrapper:
         from ct_toolkit.identity.embedding import IdentityEmbeddingLayer
         
         emb_client = self._config.embedding_client
+        emb_provider = self._config.embedding_provider
         if emb_client is None:
             if self._provider == "openai":
                 emb_client = self._client
+                emb_provider = emb_provider or "openai"
+            elif self._provider == "ollama" and self._client is not None:
+                emb_client = self._client
+                emb_provider = emb_provider or "ollama"
             else:
                 logger.debug(f"Provider {self._provider} does not support default embeddings. Falling back to local.")
 
@@ -838,6 +845,8 @@ class TheseusWrapper:
             embedding_model=self._config.embedding_model,
             project_root=self._project_root,
             strict_embedding=self._config.strict_embedding,
+            embedding_provider=emb_provider,
+            use_fastembed=self._config.use_fastembed,
         )
 
     def _init_divergence_engine(self) -> Any:
