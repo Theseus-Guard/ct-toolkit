@@ -21,7 +21,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.3.40
+  Computational Theseus Toolkit (CT Toolkit) v0.4.0
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
@@ -146,9 +146,9 @@ The L2 judge does not evaluate Jinja2 expressions in user requests or model resp
 
 | Metric           | Status                                                                                                                                                                                                              |
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Tests**        | ✅ 425 passed, 3 skipped (100% success rate, 90%+ coverage)                                                                                                                                                         |
+| **Tests**        | ✅ 426 passed, 3 skipped (100% success rate, 90%+ coverage)                                                                                                                                                         |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
-| **Last Phase**   | ✅ v0.3.40: fsspec 2026.9.0 fixes ReferenceFileSystem template-injection RCE and multidict 6.9.1 fixes items-view reference leak (Dependabot #72/#73)                                                     |
+| **Last Phase**   | ✅ v0.4.0: Async & Streaming (`achat`), Contrastive L1, Background L3 & Circuit Breaker, PostgreSQL/OTel, HMAC Header Propagation, and Web Audit Dashboard |
 
 ### Framework & Model Support
 

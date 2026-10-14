@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [0.4.0] - 2026-10-14
+
+### Added
+
+- **Async & Streaming Guardrails (`achat` & `stream=True`)** — Added native `await wrapper.achat()` and `await engine.aanalyze()` alongside token-by-token streaming (`stream=True` returning `Iterator[str]` / `AsyncIterator[str]`) with automatic post-stream L1/L2/L3 divergence analysis and provenance recording.
+- **Contrastive Semantic L1 Engine & Provider-Independent Embeddings** — Added `negative_anchors` support to identity templates with contrastive penalty calculation in `ECSCalculator`, semantic embedding conflict detection in `ConstitutionalKernel.validate_user_rule()`, and provider-independent embedding backends (`litellm`, `ollama`, local `fastembed` ONNX, `openai`, and deterministic fallback).
+- **Non-Blocking Shadow & L3 Execution + L3 Circuit Breaker** — Offloaded sandbox shadow requests (`StagedUpdateManager`) and L3 ICM probe batteries to background `ThreadPoolExecutor` threads so user latency is never blocked. Added an automatic L3 Circuit Breaker (`l3_circuit_breaker_threshold`, `circuit_breaker_open`, `reset_circuit_breaker()`) that halts requests on repeated critical L3 failures.
+- **Enterprise Provenance (PostgreSQL / SQLAlchemy) & Paginated Verification** — Added SQLAlchemy database URL support (`vault_url`, e.g., `postgresql+psycopg2://...`) to `ProvenanceLog` and paginated $O(1)$-memory hash-chain verification (`verify_chain(batch_size=1000)`).
+- **Native OpenTelemetry (`ct_toolkit.telemetry`)** — Added `TelemetryManager` (`WrapperConfig(otel_enabled=True)`) emitting `ct.chat` trace spans and `ct.requests.total`, `ct.divergence.l1.score`, `ct.divergence.alerts.total`, and `ct.circuit_breaker.trips.total` metrics with graceful no-op fallback when `opentelemetry-api` is not installed.
+- **Cryptographic Distributed Header Propagation** — Upgraded `propagate_headers()` to sign `X-CT-Kernel` and `X-CT-Timestamp` with HMAC-SHA256 (`X-CT-Signature`) and added `ConstitutionalKernel.from_headers()` with replay-window protection (`max_age_seconds=300`) and parent-kernel merging.
+- **Interactive Web Audit & Telemetry Dashboard & CLI Status** — Added `ct-toolkit status` / `ct-toolkit dashboard` terminal telemetry views and `ct-toolkit dashboard --web` (serving `/dashboard` and `/v1/status` on FastAPI) with real-time chain integrity verification, L1/L2/L3 tier breakdown, staged rule cooldown tracking, and enterprise link to [Theseus Guard](https://www.theseusguard.com).
+
+### Changed
+
+- **Modular Optional Dependencies** — Slimmed core installation footprint and organized optional extras into `cli`, `server`, `observability`, `structured`, `vision`, `postgres`, `ml`, and `all`.
+- **Repository & Documentation Migration** — Migrated official repository and documentation URLs to `Theseus-Guard/ct-toolkit` and synchronized all guides and API references with `v0.4.0`.
+
+### Security
+
+- **Localhost-Only Default & Credential Redaction in Web Dashboard** — Enforced loopback IP verification (`127.0.0.1` / `::1`) on `/dashboard` and `/v1/status` unless `CT_SERVER_API_KEY` (`X-CT-API-Key` / `Bearer`) is configured, added `X-Frame-Options: DENY` and `Content-Security-Policy` headers, and masked database credentials/paths (`redact_vault_identifier`) in API responses.
+
+### Validation
+
+- **Automated Tests:** `426 passed, 3 skipped`.
+
 ## [0.3.40] - 2026-10-11
 
 ### Security

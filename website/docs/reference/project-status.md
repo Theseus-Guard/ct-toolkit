@@ -1,6 +1,6 @@
 # Project Status
 
-**Current version:** `0.3.40`  
+**Current version:** `0.4.0`  
 **License:** Apache 2.0  
 **Python:** 3.11+
 

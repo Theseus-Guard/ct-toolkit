@@ -147,7 +147,7 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
 
 | Metric        | Status                                                                                                                                                                                                              |
 | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Version**   | ✅ `v0.3.40`                                                                                                                                                                                                        |
+| **Version**   | ✅ `v0.4.0`                                                                                                                                                                                                         |
 | **Tests**     | ✅ 426 passed, 3 skipped                                                                                                                                                                                            |
 | **Coverage**  | ✅ 90%+                                                                                                                                                                                                             |
 | **PyPI**      | ✅ `pip install ct-toolkit`                                                                                                                                                                                         |

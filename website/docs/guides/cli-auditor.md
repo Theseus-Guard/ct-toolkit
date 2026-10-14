@@ -69,7 +69,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.3.40
+  Computational Theseus Toolkit (CT Toolkit) v0.4.0
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
