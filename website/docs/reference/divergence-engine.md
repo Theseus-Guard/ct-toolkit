@@ -12,10 +12,21 @@ engine = DivergenceEngine(
     l1_threshold=0.15,
     l2_threshold=0.30,
     l3_threshold=0.50,
+    l3_background_execution=True,
+    l3_circuit_breaker_threshold=2,
 )
 
+# Synchronous analysis
 result = engine.analyze(request_text, response_text)
+
+# Asynchronous analysis (offloads L2/L3 LLM calls without blocking event loop)
+result = await engine.aanalyze(request_text, response_text)
 ```
+
+### Non-Blocking L3 & Circuit Breaker
+
+- **`l3_background_execution=True` (default):** When L3 ICM is triggered, the full probe battery runs in a background daemon thread (`ThreadPoolExecutor`) so user-facing latency is not blocked by 10+ sequential probe calls.
+- **`l3_circuit_breaker_threshold=2`:** If consecutive background L3 runs fail or breach critical divergence thresholds, `engine.circuit_breaker_open` trips to `True` and subsequent `TheseusWrapper.chat()` / `achat()` requests raise `CriticalDivergenceError` immediately until `engine.reset_circuit_breaker()` is called.
 
 !!! tip "Timeout & Retry"
     L2 Judge ve L3 ICM çağrıları otomatik timeout ve retry logic ile korunmaktadır:
@@ -26,6 +37,7 @@ result = engine.analyze(request_text, response_text)
     Retry'ler sadece geçici hatalar için yapılır (rate limit, timeout, connection error).
 
 ## DivergenceResult fields
+
 
 | Field | Type | Description |
 |:---|:---|:---|

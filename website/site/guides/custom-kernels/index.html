@@ -1409,10 +1409,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#keyword-design-tips" class="md-nav__link">
+  <a href="#keyword-design-semantic-conflict-detection" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Keyword design tips
+        Keyword design &amp; Semantic Conflict Detection
       
     </span>
   </a>
@@ -2525,10 +2525,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#keyword-design-tips" class="md-nav__link">
+  <a href="#keyword-design-semantic-conflict-detection" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Keyword design tips
+        Keyword design &amp; Semantic Conflict Detection
       
     </span>
   </a>
@@ -2730,11 +2730,18 @@
 </span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="k">except</span> <span class="n">PlasticConflictError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
 </span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Conflict: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="keyword-design-tips">Keyword design tips<a class="headerlink" href="#keyword-design-tips" title="Permanent link">&para;</a></h2>
+<h2 id="keyword-design-semantic-conflict-detection">Keyword design &amp; Semantic Conflict Detection<a class="headerlink" href="#keyword-design-semantic-conflict-detection" title="Permanent link">&para;</a></h2>
+<p><code>validate_user_rule()</code> uses a <strong>two-layer defense</strong>:</p>
+<ol>
+<li><strong>Deterministic Keyword Matching:</strong> Fast substring scan against <code>keywords</code> in your YAML.</li>
+<li><strong>Semantic Embedding Similarity:</strong> Even if a user paraphrases a rule without using any exact keyword (e.g., <em>"skip the compliance verification step"</em> instead of <em>"bypass kyc"</em>), <code>TheseusWrapper</code> embeds the user rule and compares its cosine similarity against your anchor descriptions and keywords (<code>WrapperConfig.conflict_similarity_threshold = 0.75</code>).</li>
+</ol>
+<p>Tips for designing anchors and keywords:</p>
 <ul>
-<li><strong>Be specific.</strong> <code>"bypass kyc"</code> is better than <code>"bypass"</code> (too broad).</li>
-<li><strong>Cover paraphrases.</strong> Add 3–5 variations of the same concept.</li>
-<li><strong>Avoid noise.</strong> Don't add common words that appear in legitimate instructions.</li>
+<li><strong>Write clear <code>description</code> fields.</strong> The description text is embedded directly for semantic conflict detection.</li>
+<li><strong>Be specific with keywords.</strong> <code>"bypass kyc"</code> is better than <code>"bypass"</code> (too broad).</li>
+<li><strong>Cover paraphrases.</strong> Add 3–5 representative phrases to anchor the semantic space.</li>
+<li><strong>Avoid noise.</strong> Don't add common single words that appear in legitimate instructions.</li>
 </ul>
 <h2 id="extending-built-in-kernels">Extending built-in kernels<a class="headerlink" href="#extending-built-in-kernels" title="Permanent link">&para;</a></h2>
 <p>Always include the default anchors in critical domain kernels:</p>

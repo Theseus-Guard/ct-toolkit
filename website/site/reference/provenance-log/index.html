@@ -1882,10 +1882,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verify_chain-bool" class="md-nav__link">
+  <a href="#verify_chainbatch_size-int-1000-bool" class="md-nav__link">
     <span class="md-ellipsis">
       
-        verify_chain() → bool
+        verify_chain(batch_size: int = 1000) → bool
       
     </span>
   </a>
@@ -2520,10 +2520,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verify_chain-bool" class="md-nav__link">
+  <a href="#verify_chainbatch_size-int-1000-bool" class="md-nav__link">
     <span class="md-ellipsis">
       
-        verify_chain() → bool
+        verify_chain(batch_size: int = 1000) → bool
       
     </span>
   </a>
@@ -2672,14 +2672,19 @@
 <h1 id="provenancelog-reference">ProvenanceLog Reference<a class="headerlink" href="#provenancelog-reference" title="Permanent link">&para;</a></h1>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ct_toolkit.provenance.log</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProvenanceLog</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Default: sensitive data masking is enabled</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Default: local SQLite with sensitive data masking enabled</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">log</span> <span class="o">=</span> <span class="n">ProvenanceLog</span><span class="p">(</span><span class="n">vault_path</span><span class="o">=</span><span class="s2">&quot;./ct_provenance.db&quot;</span><span class="p">)</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Disable sensitive data masking (not recommended for production)</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">log</span> <span class="o">=</span> <span class="n">ProvenanceLog</span><span class="p">(</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">vault_path</span><span class="o">=</span><span class="s2">&quot;./ct_provenance.db&quot;</span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">mask_sensitive_data</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Production: remote SQLAlchemy / PostgreSQL database</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">pg_log</span> <span class="o">=</span> <span class="n">ProvenanceLog</span><span class="p">(</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">vault_url</span><span class="o">=</span><span class="s2">&quot;postgresql+psycopg2://user:pass@db.internal:5432/ct_audit&quot;</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># Disable sensitive data masking (not recommended for production)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">log</span> <span class="o">=</span> <span class="n">ProvenanceLog</span><span class="p">(</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">vault_path</span><span class="o">=</span><span class="s2">&quot;./ct_provenance.db&quot;</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">mask_sensitive_data</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="constructor-parameters">Constructor Parameters<a class="headerlink" href="#constructor-parameters" title="Permanent link">&para;</a></h2>
 <table>
@@ -2696,13 +2701,19 @@
 <td><code>vault_type</code></td>
 <td><code>str</code></td>
 <td><code>"local"</code></td>
-<td>Storage backend type</td>
+<td>Storage backend type (<code>"local"</code> or <code>"sqlalchemy"</code>)</td>
 </tr>
 <tr>
 <td><code>vault_path</code></td>
 <td><code>str</code></td>
 <td><code>"./ct_provenance.db"</code></td>
-<td>Database file path</td>
+<td>Local SQLite database file path</td>
+</tr>
+<tr>
+<td><code>vault_url</code></td>
+<td><code>str \| None</code></td>
+<td><code>None</code></td>
+<td>SQLAlchemy DB URL (e.g., <code>postgresql+psycopg2://...</code>). Overrides <code>vault_path</code> when set</td>
 </tr>
 <tr>
 <td><code>hmac_key</code></td>
@@ -2714,7 +2725,7 @@
 <td><code>mask_sensitive_data</code></td>
 <td><code>bool</code></td>
 <td><code>True</code></td>
-<td><strong>New:</strong> Enable automatic sensitive data masking</td>
+<td>Enable automatic sensitive data masking</td>
 </tr>
 </tbody>
 </table>
@@ -2732,8 +2743,8 @@
 <h2 id="methods">Methods<a class="headerlink" href="#methods" title="Permanent link">&para;</a></h2>
 <h3 id="recordrequest_text-response_text-divergence_score-metadata-str"><code>record(request_text, response_text, divergence_score, metadata) → str</code><a class="headerlink" href="#recordrequest_text-response_text-divergence_score-metadata-str" title="Permanent link">&para;</a></h3>
 <p>Returns the entry UUID.</p>
-<h3 id="verify_chain-bool"><code>verify_chain() → bool</code><a class="headerlink" href="#verify_chain-bool" title="Permanent link">&para;</a></h3>
-<p>Raises <code>ChainIntegrityError</code> if any entry has been tampered with.</p>
+<h3 id="verify_chainbatch_size-int-1000-bool"><code>verify_chain(batch_size: int = 1000) → bool</code><a class="headerlink" href="#verify_chainbatch_size-int-1000-bool" title="Permanent link">&para;</a></h3>
+<p>Verifies the entire hash chain and HMAC signatures in paginated batches (<code>batch_size=1000</code>) with <span class="arithmatex">\(O(1)\)</span> memory usage. Raises <code>ChainIntegrityError</code> if any entry has been tampered with.</p>
 <h3 id="get_entrieslimit-include_rolled_back-listprovenanceentry"><code>get_entries(limit, include_rolled_back) → list[ProvenanceEntry]</code><a class="headerlink" href="#get_entrieslimit-include_rolled_back-listprovenanceentry" title="Permanent link">&para;</a></h3>
 <h3 id="get_entryentry_id-provenanceentry-none"><code>get_entry(entry_id) → ProvenanceEntry | None</code><a class="headerlink" href="#get_entryentry_id-provenanceentry-none" title="Permanent link">&para;</a></h3>
 <h3 id="export_loginclude_rolled_back-listdict"><code>export_log(include_rolled_back) → list[dict]</code><a class="headerlink" href="#export_loginclude_rolled_back-listdict" title="Permanent link">&para;</a></h3>

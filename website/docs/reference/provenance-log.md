@@ -3,8 +3,13 @@
 ```python
 from ct_toolkit.provenance.log import ProvenanceLog
 
-# Default: sensitive data masking is enabled
+# Default: local SQLite with sensitive data masking enabled
 log = ProvenanceLog(vault_path="./ct_provenance.db")
+
+# Production: remote SQLAlchemy / PostgreSQL database
+pg_log = ProvenanceLog(
+    vault_url="postgresql+psycopg2://user:pass@db.internal:5432/ct_audit"
+)
 
 # Disable sensitive data masking (not recommended for production)
 log = ProvenanceLog(
@@ -17,10 +22,11 @@ log = ProvenanceLog(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `vault_type` | `str` | `"local"` | Storage backend type |
-| `vault_path` | `str` | `"./ct_provenance.db"` | Database file path |
+| `vault_type` | `str` | `"local"` | Storage backend type (`"local"` or `"sqlalchemy"`) |
+| `vault_path` | `str` | `"./ct_provenance.db"` | Local SQLite database file path |
+| `vault_url` | `str \| None` | `None` | SQLAlchemy DB URL (e.g., `postgresql+psycopg2://...`). Overrides `vault_path` when set |
 | `hmac_key` | `bytes \| None` | `None` | HMAC secret (auto-generated if not provided) |
-| `mask_sensitive_data` | `bool` | `True` | **New:** Enable automatic sensitive data masking |
+| `mask_sensitive_data` | `bool` | `True` | Enable automatic sensitive data masking |
 
 !!! tip "Sensitive Data Masking"
     ProvenanceLog automatically detects and masks sensitive data before storing entries:
@@ -38,9 +44,10 @@ log = ProvenanceLog(
 
 Returns the entry UUID.
 
-### `verify_chain() → bool`
+### `verify_chain(batch_size: int = 1000) → bool`
 
-Raises `ChainIntegrityError` if any entry has been tampered with.
+Verifies the entire hash chain and HMAC signatures in paginated batches (`batch_size=1000`) with $O(1)$ memory usage. Raises `ChainIntegrityError` if any entry has been tampered with.
+
 
 ### `get_entries(limit, include_rolled_back) → list[ProvenanceEntry]`
 

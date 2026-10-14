@@ -123,11 +123,20 @@ except PlasticConflictError as e:
     print(f"Conflict: {e}")
 ```
 
-## Keyword design tips
+## Keyword design & Semantic Conflict Detection
 
-- **Be specific.** `"bypass kyc"` is better than `"bypass"` (too broad).
-- **Cover paraphrases.** Add 3–5 variations of the same concept.
-- **Avoid noise.** Don't add common words that appear in legitimate instructions.
+`validate_user_rule()` uses a **two-layer defense**:
+
+1. **Deterministic Keyword Matching:** Fast substring scan against `keywords` in your YAML.
+2. **Semantic Embedding Similarity:** Even if a user paraphrases a rule without using any exact keyword (e.g., *"skip the compliance verification step"* instead of *"bypass kyc"*), `TheseusWrapper` embeds the user rule and compares its cosine similarity against your anchor descriptions and keywords (`WrapperConfig.conflict_similarity_threshold = 0.75`).
+
+Tips for designing anchors and keywords:
+
+- **Write clear `description` fields.** The description text is embedded directly for semantic conflict detection.
+- **Be specific with keywords.** `"bypass kyc"` is better than `"bypass"` (too broad).
+- **Cover paraphrases.** Add 3–5 representative phrases to anchor the semantic space.
+- **Avoid noise.** Don't add common single words that appear in legitimate instructions.
+
 
 ## Extending built-in kernels
 

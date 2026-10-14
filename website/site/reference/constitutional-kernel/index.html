@@ -1798,10 +1798,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validate_user_rulerule_text-raises-on-conflict" class="md-nav__link">
+  <a href="#validate_user_rulerule_text-embedding_fnnone-similarity_threshold075-raises-on-conflict" class="md-nav__link">
     <span class="md-ellipsis">
       
-        validate_user_rule(rule_text) → raises on conflict
+        validate_user_rule(rule_text, *, embedding_fn=None, similarity_threshold=0.75) → raises on conflict
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#constitutionalkernelfrom_headersheaders-secret_keynone-base_kernelnone-max_age_seconds300-constitutionalkernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ConstitutionalKernel.from_headers(headers, secret_key=None, *, base_kernel=None, max_age_seconds=300) → ConstitutionalKernel
       
     </span>
   </a>
@@ -2498,10 +2509,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validate_user_rulerule_text-raises-on-conflict" class="md-nav__link">
+  <a href="#validate_user_rulerule_text-embedding_fnnone-similarity_threshold075-raises-on-conflict" class="md-nav__link">
     <span class="md-ellipsis">
       
-        validate_user_rule(rule_text) → raises on conflict
+        validate_user_rule(rule_text, *, embedding_fn=None, similarity_threshold=0.75) → raises on conflict
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#constitutionalkernelfrom_headersheaders-secret_keynone-base_kernelnone-max_age_seconds300-constitutionalkernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ConstitutionalKernel.from_headers(headers, secret_key=None, *, base_kernel=None, max_age_seconds=300) → ConstitutionalKernel
       
     </span>
   </a>
@@ -2665,7 +2687,19 @@
 </tbody>
 </table>
 <h2 id="methods">Methods<a class="headerlink" href="#methods" title="Permanent link">&para;</a></h2>
-<h3 id="validate_user_rulerule_text-raises-on-conflict"><code>validate_user_rule(rule_text)</code> → raises on conflict<a class="headerlink" href="#validate_user_rulerule_text-raises-on-conflict" title="Permanent link">&para;</a></h3>
+<h3 id="validate_user_rulerule_text-embedding_fnnone-similarity_threshold075-raises-on-conflict"><code>validate_user_rule(rule_text, *, embedding_fn=None, similarity_threshold=0.75)</code> → raises on conflict<a class="headerlink" href="#validate_user_rulerule_text-embedding_fnnone-similarity_threshold075-raises-on-conflict" title="Permanent link">&para;</a></h3>
+<p>Checks <code>rule_text</code> against all <code>AxiomaticAnchor</code> and <code>PlasticCommitment</code> rules using:</p>
+<ol>
+<li><strong>Keyword matching:</strong> Fast deterministic substring scan.</li>
+<li><strong>Semantic similarity:</strong> When <code>embedding_fn</code> is provided (automatically wired by <code>TheseusWrapper</code>), computes cosine similarity between the user rule embedding and each anchor/commitment description + keyword phrase to catch paraphrased bypasses.</li>
+</ol>
+<h3 id="constitutionalkernelfrom_headersheaders-secret_keynone-base_kernelnone-max_age_seconds300-constitutionalkernel"><code>ConstitutionalKernel.from_headers(headers, secret_key=None, *, base_kernel=None, max_age_seconds=300) → ConstitutionalKernel</code><a class="headerlink" href="#constitutionalkernelfrom_headersheaders-secret_keynone-base_kernelnone-max_age_seconds300-constitutionalkernel" title="Permanent link">&para;</a></h3>
+<p>Reconstructs and verifies a parent kernel received over HTTP headers (<code>X-CT-Kernel</code>, <code>X-CT-Signature</code>, <code>X-CT-Timestamp</code>):</p>
+<ul>
+<li>Verifies the HMAC-SHA256 signature (<code>hmac.compare_digest</code>) using <code>secret_key</code> or <code>CT_PROPAGATION_SECRET</code>.</li>
+<li>Enforces a replay window (<code>max_age_seconds=300</code> by default).</li>
+<li>If <code>base_kernel</code> is provided, returns <code>base_kernel.merge(parent_kernel)</code> so parent constraints become axiomatic in the sub-agent.</li>
+</ul>
 <h3 id="update_commitmentcommitment_id-new_value-updates-a-plastic-commitment"><code>update_commitment(commitment_id, new_value)</code> → updates a plastic commitment<a class="headerlink" href="#update_commitmentcommitment_id-new_value-updates-a-plastic-commitment" title="Permanent link">&para;</a></h3>
 <h3 id="mergeother-constitutionalkernel"><code>merge(other) → ConstitutionalKernel</code><a class="headerlink" href="#mergeother-constitutionalkernel" title="Permanent link">&para;</a></h3>
 <p>Creates a merged kernel where the other kernel's rules become axiomatic:</p>

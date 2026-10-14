@@ -25,9 +25,9 @@ wrapper = TheseusWrapper(provider="openai")
 
 ## Methods
 
-### `chat(message, *, model, system, history, **kwargs) → CTResponse`
+### `chat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | Iterator[str]`
 
-Send a message and receive an enriched response.
+Send a message and receive an enriched response (or a token generator when `stream=True`).
 
 ```python
 response = wrapper.chat(
@@ -36,11 +36,27 @@ response = wrapper.chat(
     system="Additional context.",
     history=[{"role": "user", "content": "Hello"}],
 )
+
+# Streaming mode — divergence & provenance run automatically when stream completes
+for chunk in wrapper.chat("Explain your axioms.", stream=True):
+    print(chunk, end="", flush=True)
+```
+
+### `await achat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | AsyncIterator[str]`
+
+Asynchronous counterpart to `chat()`. Offloads synchronous provider SDK calls via `asyncio.to_thread` when native async clients aren't used, and runs `DivergenceEngine.aanalyze()` without blocking the event loop.
+
+```python
+response = await wrapper.achat("What are your core values?", model="gpt-4o-mini")
+
+# Async streaming mode
+async for chunk in await wrapper.achat("Explain your axioms.", stream=True):
+    print(chunk, end="", flush=True)
 ```
 
 ### `validate_user_rule(rule_text) → None`
 
-Validate a rule against the kernel. Raises `AxiomaticViolationError` or `PlasticConflictError` on conflict.
+Validate a rule against the kernel using both deterministic keyword matching and semantic embedding similarity (`conflict_similarity_threshold`). Raises `AxiomaticViolationError` or `PlasticConflictError` on conflict.
 
 ### `endorse_rule(rule_text, *, operator_id, approval_channel, commitment_new_value) → EndorsementRecord`
 
@@ -71,12 +87,13 @@ Return middleware-friendly policy metadata payload:
 }
 ```
 
-### `propagate_headers(*, model=None, role=None) → dict[str, str]`
+### `propagate_headers(*, secret_key=None, model=None, role=None) → dict[str, str]`
 
-Generate HTTP headers for sub-agent kernel propagation.
+Generate cryptographically signed HTTP headers for sub-agent kernel & policy propagation across network boundaries:
 
-Includes policy headers:
-
+- `X-CT-Kernel` (base64-encoded canonical JSON of the parent kernel)
+- `X-CT-Timestamp` (Unix epoch seconds for replay-window protection)
+- `X-CT-Signature` (HMAC-SHA256 signature over `<timestamp>.<base64_kernel>` using `secret_key` or `CT_PROPAGATION_SECRET`)
 - `X-CT-Policy-Role`
 - `X-CT-Policy-Environment`
 - `X-CT-Policy` (base64 JSON payload)

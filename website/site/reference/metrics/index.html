@@ -2047,6 +2047,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#native-opentelemetry-ct_toolkittelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native OpenTelemetry (ct_toolkit.telemetry)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Native OpenTelemetry (ct_toolkit.telemetry)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enabling-opentelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enabling OpenTelemetry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emitted-spans-instruments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emitted Spans &amp; Instruments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2657,6 +2696,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#native-opentelemetry-ct_toolkittelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native OpenTelemetry (ct_toolkit.telemetry)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Native OpenTelemetry (ct_toolkit.telemetry)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enabling-opentelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enabling OpenTelemetry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emitted-spans-instruments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emitted Spans &amp; Instruments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2893,17 +2971,70 @@
 </span></code></pre></div>
 <h2 id="integration-with-theseuswrapper">Integration with TheseusWrapper<a class="headerlink" href="#integration-with-theseuswrapper" title="Permanent link">&para;</a></h2>
 <p>Metrics are automatically collected when using the wrapper with metrics enabled (default):</p>
-<p>```python
-from ct_toolkit.core.async_wrapper import AsyncTheseusWrapper</p>
-<p>wrapper = AsyncTheseusWrapper(
-    provider="openai",
-    metrics_enabled=True,  # Enable automatic metrics collection
-    enable_circuit_breaker=True,
-)</p>
-<h1 id="metrics-are-automatically-recorded">Metrics are automatically recorded<a class="headerlink" href="#metrics-are-automatically-recorded" title="Permanent link">&para;</a></h1>
-<p>response = await wrapper.chat("Hello!", model="gpt-4")</p>
-<h1 id="get-collected-metrics">Get collected metrics<a class="headerlink" href="#get-collected-metrics" title="Permanent link">&para;</a></h1>
-<p>stats = wrapper.get_metrics()</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ct_toolkit.core.async_wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="n">AsyncTheseusWrapper</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">wrapper</span> <span class="o">=</span> <span class="n">AsyncTheseusWrapper</span><span class="p">(</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">metrics_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1"># Enable automatic metrics collection</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">enable_circuit_breaker</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="p">)</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="c1"># Metrics are automatically recorded</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">chat</span><span class="p">(</span><span class="s2">&quot;Hello!&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;gpt-4&quot;</span><span class="p">)</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="c1"># Get collected metrics</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">stats</span> <span class="o">=</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">get_metrics</span><span class="p">()</span>
+</span></code></pre></div>
+<hr />
+<h2 id="native-opentelemetry-ct_toolkittelemetry">Native OpenTelemetry (<code>ct_toolkit.telemetry</code>)<a class="headerlink" href="#native-opentelemetry-ct_toolkittelemetry" title="Permanent link">&para;</a></h2>
+<p>In addition to the built-in thread-safe <code>MetricsCollector</code>, CT Toolkit includes first-class <strong>OpenTelemetry</strong> tracing and metrics via <code>ct_toolkit/telemetry.py</code>. When <code>opentelemetry-api</code> is not installed, all telemetry calls gracefully degrade to zero-overhead no-ops.</p>
+<h3 id="enabling-opentelemetry">Enabling OpenTelemetry<a class="headerlink" href="#enabling-opentelemetry" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;ct-toolkit[observability]&quot;</span>
+</span></code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ct_toolkit</span><span class="w"> </span><span class="kn">import</span> <span class="n">TheseusWrapper</span><span class="p">,</span> <span class="n">WrapperConfig</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">wrapper</span> <span class="o">=</span> <span class="n">TheseusWrapper</span><span class="p">(</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">config</span><span class="o">=</span><span class="n">WrapperConfig</span><span class="p">(</span><span class="n">otel_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="emitted-spans-instruments">Emitted Spans &amp; Instruments<a class="headerlink" href="#emitted-spans-instruments" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Instrument / Span</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>ct.chat</code></td>
+<td style="text-align: left;">Trace Span</td>
+<td style="text-align: left;">Wraps each <code>chat()</code> / <code>achat()</code> call with provider, model, template, kernel, and divergence attributes</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ct.requests.total</code></td>
+<td style="text-align: left;">Counter</td>
+<td style="text-align: left;">Total LLM requests processed through <code>TheseusWrapper</code></td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ct.divergence.l1.score</code></td>
+<td style="text-align: left;">Histogram</td>
+<td style="text-align: left;">Distribution of L1 Embedding Cosine Similarity (ECS) divergence scores</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ct.divergence.alerts.total</code></td>
+<td style="text-align: left;">Counter</td>
+<td style="text-align: left;">Total L1/L2/L3 divergence alerts triggered</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>ct.circuit_breaker.trips.total</code></td>
+<td style="text-align: left;">Counter</td>
+<td style="text-align: left;">Total L3 circuit breaker trips</td>
+</tr>
+</tbody>
+</table>
 
 
 

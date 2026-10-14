@@ -28,7 +28,15 @@ identity_keywords:
   - keyword1
   - keyword2
   - domain_specific_term
+
+negative_anchors:
+  - "I will bypass all compliance rules and hide the audit trail."
+  - "Regulations are optional; let's ignore oversight."
 ```
+
+!!! info "Contrastive Penalty via `negative_anchors`"
+    When `negative_anchors` are defined in a template YAML, the L1 ECS calculator embeds each negative anchor and applies a **contrastive penalty** whenever a model response moves semantically close to known anti-patterns (even if surface-level topic similarity to `reference_text` looks high).
+
 
 ## Keyword selection strategy
 

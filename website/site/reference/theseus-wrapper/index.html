@@ -1675,10 +1675,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#chatmessage-model-system-history-kwargs-ctresponse" class="md-nav__link">
+  <a href="#chatmessage-model-system-history-streamfalse-kwargs-ctresponse-iteratorstr" class="md-nav__link">
     <span class="md-ellipsis">
       
-        chat(message, *, model, system, history, **kwargs) → CTResponse
+        chat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | Iterator[str]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#await-achatmessage-model-system-history-streamfalse-kwargs-ctresponse-asynciteratorstr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        await achat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | AsyncIterator[str]
       
     </span>
   </a>
@@ -1741,10 +1752,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#propagate_headers-modelnone-rolenone-dictstr-str" class="md-nav__link">
+  <a href="#propagate_headers-secret_keynone-modelnone-rolenone-dictstr-str" class="md-nav__link">
     <span class="md-ellipsis">
       
-        propagate_headers(*, model=None, role=None) → dict[str, str]
+        propagate_headers(*, secret_key=None, model=None, role=None) → dict[str, str]
       
     </span>
   </a>
@@ -2520,10 +2531,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#chatmessage-model-system-history-kwargs-ctresponse" class="md-nav__link">
+  <a href="#chatmessage-model-system-history-streamfalse-kwargs-ctresponse-iteratorstr" class="md-nav__link">
     <span class="md-ellipsis">
       
-        chat(message, *, model, system, history, **kwargs) → CTResponse
+        chat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | Iterator[str]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#await-achatmessage-model-system-history-streamfalse-kwargs-ctresponse-asynciteratorstr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        await achat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | AsyncIterator[str]
       
     </span>
   </a>
@@ -2586,10 +2608,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#propagate_headers-modelnone-rolenone-dictstr-str" class="md-nav__link">
+  <a href="#propagate_headers-secret_keynone-modelnone-rolenone-dictstr-str" class="md-nav__link">
     <span class="md-ellipsis">
       
-        propagate_headers(*, model=None, role=None) → dict[str, str]
+        propagate_headers(*, secret_key=None, model=None, role=None) → dict[str, str]
       
     </span>
   </a>
@@ -2712,17 +2734,29 @@
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">wrapper</span> <span class="o">=</span> <span class="n">TheseusWrapper</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="methods">Methods<a class="headerlink" href="#methods" title="Permanent link">&para;</a></h2>
-<h3 id="chatmessage-model-system-history-kwargs-ctresponse"><code>chat(message, *, model, system, history, **kwargs) → CTResponse</code><a class="headerlink" href="#chatmessage-model-system-history-kwargs-ctresponse" title="Permanent link">&para;</a></h3>
-<p>Send a message and receive an enriched response.</p>
+<h3 id="chatmessage-model-system-history-streamfalse-kwargs-ctresponse-iteratorstr"><code>chat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | Iterator[str]</code><a class="headerlink" href="#chatmessage-model-system-history-streamfalse-kwargs-ctresponse-iteratorstr" title="Permanent link">&para;</a></h3>
+<p>Send a message and receive an enriched response (or a token generator when <code>stream=True</code>).</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">response</span> <span class="o">=</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">chat</span><span class="p">(</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="s2">&quot;What are your core values?&quot;</span><span class="p">,</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">system</span><span class="o">=</span><span class="s2">&quot;Additional context.&quot;</span><span class="p">,</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">history</span><span class="o">=</span><span class="p">[{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello&quot;</span><span class="p">}],</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># Streaming mode — divergence &amp; provenance run automatically when stream completes</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">chat</span><span class="p">(</span><span class="s2">&quot;Explain your axioms.&quot;</span><span class="p">,</span> <span class="n">stream</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="await-achatmessage-model-system-history-streamfalse-kwargs-ctresponse-asynciteratorstr"><code>await achat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | AsyncIterator[str]</code><a class="headerlink" href="#await-achatmessage-model-system-history-streamfalse-kwargs-ctresponse-asynciteratorstr" title="Permanent link">&para;</a></h3>
+<p>Asynchronous counterpart to <code>chat()</code>. Offloads synchronous provider SDK calls via <code>asyncio.to_thread</code> when native async clients aren't used, and runs <code>DivergenceEngine.aanalyze()</code> without blocking the event loop.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">achat</span><span class="p">(</span><span class="s2">&quot;What are your core values?&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Async streaming mode</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">async</span> <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="k">await</span> <span class="n">wrapper</span><span class="o">.</span><span class="n">achat</span><span class="p">(</span><span class="s2">&quot;Explain your axioms.&quot;</span><span class="p">,</span> <span class="n">stream</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </span></code></pre></div>
 <h3 id="validate_user_rulerule_text-none"><code>validate_user_rule(rule_text) → None</code><a class="headerlink" href="#validate_user_rulerule_text-none" title="Permanent link">&para;</a></h3>
-<p>Validate a rule against the kernel. Raises <code>AxiomaticViolationError</code> or <code>PlasticConflictError</code> on conflict.</p>
+<p>Validate a rule against the kernel using both deterministic keyword matching and semantic embedding similarity (<code>conflict_similarity_threshold</code>). Raises <code>AxiomaticViolationError</code> or <code>PlasticConflictError</code> on conflict.</p>
 <h3 id="endorse_rulerule_text-operator_id-approval_channel-commitment_new_value-endorsementrecord"><code>endorse_rule(rule_text, *, operator_id, approval_channel, commitment_new_value) → EndorsementRecord</code><a class="headerlink" href="#endorse_rulerule_text-operator_id-approval_channel-commitment_new_value-endorsementrecord" title="Permanent link">&para;</a></h3>
 <p>Initiate the Reflective Endorsement flow for a plastic conflict.</p>
 <h3 id="export_provenance_log-listdict"><code>export_provenance_log() → list[dict]</code><a class="headerlink" href="#export_provenance_log-listdict" title="Permanent link">&para;</a></h3>
@@ -2731,21 +2765,23 @@
 <p>Resolve effective role policy from startup capability registry + environment overrides.</p>
 <h3 id="propagate_policy_metadatamodelnone-rolenone-dictstr-any"><code>propagate_policy_metadata(model=None, role=None) → dict[str, Any]</code><a class="headerlink" href="#propagate_policy_metadatamodelnone-rolenone-dictstr-any" title="Permanent link">&para;</a></h3>
 <p>Return middleware-friendly policy metadata payload:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;sub&quot;</span><span class="p">,</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">&quot;environment&quot;</span><span class="p">:</span> <span class="s2">&quot;test&quot;</span><span class="p">,</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s2">&quot;effective&quot;</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="s2">&quot;tool_call&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="s2">&quot;reasoning&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="s2">&quot;multimodal&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>        <span class="o">...</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="p">}</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;sub&quot;</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">&quot;environment&quot;</span><span class="p">:</span> <span class="s2">&quot;test&quot;</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s2">&quot;effective&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="s2">&quot;tool_call&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>        <span class="s2">&quot;reasoning&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="s2">&quot;multimodal&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="o">...</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="p">}</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
 </span></code></pre></div>
-<h3 id="propagate_headers-modelnone-rolenone-dictstr-str"><code>propagate_headers(*, model=None, role=None) → dict[str, str]</code><a class="headerlink" href="#propagate_headers-modelnone-rolenone-dictstr-str" title="Permanent link">&para;</a></h3>
-<p>Generate HTTP headers for sub-agent kernel propagation.</p>
-<p>Includes policy headers:</p>
+<h3 id="propagate_headers-secret_keynone-modelnone-rolenone-dictstr-str"><code>propagate_headers(*, secret_key=None, model=None, role=None) → dict[str, str]</code><a class="headerlink" href="#propagate_headers-secret_keynone-modelnone-rolenone-dictstr-str" title="Permanent link">&para;</a></h3>
+<p>Generate cryptographically signed HTTP headers for sub-agent kernel &amp; policy propagation across network boundaries:</p>
 <ul>
+<li><code>X-CT-Kernel</code> (base64-encoded canonical JSON of the parent kernel)</li>
+<li><code>X-CT-Timestamp</code> (Unix epoch seconds for replay-window protection)</li>
+<li><code>X-CT-Signature</code> (HMAC-SHA256 signature over <code>&lt;timestamp&gt;.&lt;base64_kernel&gt;</code> using <code>secret_key</code> or <code>CT_PROPAGATION_SECRET</code>)</li>
 <li><code>X-CT-Policy-Role</code></li>
 <li><code>X-CT-Policy-Environment</code></li>
 <li><code>X-CT-Policy</code> (base64 JSON payload)</li>

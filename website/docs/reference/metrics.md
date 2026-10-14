@@ -159,3 +159,35 @@ response = await wrapper.chat("Hello!", model="gpt-4")
 
 # Get collected metrics
 stats = wrapper.get_metrics()
+```
+
+---
+
+## Native OpenTelemetry (`ct_toolkit.telemetry`)
+
+In addition to the built-in thread-safe `MetricsCollector`, CT Toolkit includes first-class **OpenTelemetry** tracing and metrics via `ct_toolkit/telemetry.py`. When `opentelemetry-api` is not installed, all telemetry calls gracefully degrade to zero-overhead no-ops.
+
+### Enabling OpenTelemetry
+
+```bash
+pip install "ct-toolkit[observability]"
+```
+
+```python
+from ct_toolkit import TheseusWrapper, WrapperConfig
+
+wrapper = TheseusWrapper(
+    provider="openai",
+    config=WrapperConfig(otel_enabled=True),
+)
+```
+
+### Emitted Spans & Instruments
+
+| Instrument / Span | Type | Description |
+| :--- | :--- | :--- |
+| `ct.chat` | Trace Span | Wraps each `chat()` / `achat()` call with provider, model, template, kernel, and divergence attributes |
+| `ct.requests.total` | Counter | Total LLM requests processed through `TheseusWrapper` |
+| `ct.divergence.l1.score` | Histogram | Distribution of L1 Embedding Cosine Similarity (ECS) divergence scores |
+| `ct.divergence.alerts.total` | Counter | Total L1/L2/L3 divergence alerts triggered |
+| `ct.circuit_breaker.trips.total` | Counter | Total L3 circuit breaker trips |
