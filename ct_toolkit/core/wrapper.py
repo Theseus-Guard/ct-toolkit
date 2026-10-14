@@ -49,6 +49,7 @@ from ct_toolkit.endorsement.reflective import (
     CooldownCalculator
 )
 from ct_toolkit.utils.logger import get_logger
+from ct_toolkit.utils.telemetry import TelemetryManager
 
 logger = get_logger(__name__)
 
@@ -63,7 +64,7 @@ class WrapperConfig:
     divergence_l1_threshold: float = 0.15   # ECS — warning
     divergence_l2_threshold: float = 0.30   # Trigger LLM-as-judge
     divergence_l3_threshold: float = 0.50   # Trigger ICM battery
-    vault_type: str = "local"               # "local" | "cloud"
+    vault_type: str = "local"               # "local" | "cloud" | "postgres" | "sqlalchemy"
     vault_path: str = "./ct_provenance.db"
     auto_inject_kernel: bool = True
     log_requests: bool = True
@@ -112,6 +113,10 @@ class WrapperConfig:
     l3_background: bool = False
     circuit_breaker_on_critical: bool = True
     circuit_breaker_recovery_timeout: float = 300.0
+
+    # -- Telemetry / OpenTelemetry --
+    enable_telemetry: bool = True
+    telemetry_metric_callback: Callable[[str, float, dict[str, Any]], None] | None = None
 
 
 @dataclass
@@ -246,7 +251,7 @@ class TheseusWrapper:
             kernel=self._config.kernel_name,
         )
 
-        # ── Background Executor & Circuit Breaker ──
+        # ── Background Executor, Circuit Breaker & Telemetry ──
         self._bg_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ct_shadow_bg")
         self._background_futures: list[Future[Any]] = []
         self._background_tasks: set[asyncio.Task[Any]] = set()
@@ -255,6 +260,10 @@ class TheseusWrapper:
             name="theseus_guard_breaker",
             failure_threshold=1,
             recovery_timeout=self._config.circuit_breaker_recovery_timeout,
+        )
+        self._telemetry = TelemetryManager(
+            enabled=self._config.enable_telemetry,
+            on_metric_callback=self._config.telemetry_metric_callback,
         )
 
         self._provenance_log = self._init_provenance_log()
@@ -904,6 +913,7 @@ class TheseusWrapper:
             policy_resolver=self.resolve_llm_policy,
             l3_background=self._config.l3_background,
             on_critical_callback=self._on_critical_l3_report,
+            telemetry=self._telemetry,
         )
 
     def _on_critical_l3_report(self, report: Any) -> None:
@@ -927,6 +937,7 @@ class TheseusWrapper:
             return
         engine_tripped = getattr(self._divergence_engine, "circuit_breaker_tripped", False)
         if not self._circuit_breaker.allow_request() or engine_tripped:
+            self._telemetry.record_policy_blocked(reason="circuit_breaker_open")
             state = self._circuit_breaker.state if not self._circuit_breaker.allow_request() else CircuitState.OPEN
             retry_after = self._circuit_breaker.time_until_recovery()
             raise CircuitBreakerError(state, retry_after)
@@ -942,6 +953,11 @@ class TheseusWrapper:
     def circuit_breaker(self) -> CircuitBreaker:
         """Returns the wrapper's circuit breaker instance."""
         return self._circuit_breaker
+
+    @property
+    def telemetry(self) -> TelemetryManager:
+        """Returns the wrapper's TelemetryManager instance."""
+        return self._telemetry
 
     @property
     def last_background_error(self) -> Exception | None:

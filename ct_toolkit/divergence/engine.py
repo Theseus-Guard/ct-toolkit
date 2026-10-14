@@ -26,6 +26,7 @@ from ct_toolkit.divergence.l2_judge import LLMJudge, JudgeVerdict
 from ct_toolkit.divergence.l3_icm import ICMRunner, ICMReport
 from ct_toolkit.divergence.analysis import PolicyDriftAnalyzer, DriftReport
 from ct_toolkit.utils.logger import get_logger
+from ct_toolkit.utils.telemetry import TelemetryManager
 
 logger = get_logger(__name__)
 
@@ -123,6 +124,7 @@ class DivergenceEngine:
         policy_resolver: Callable[[str | None, str | None], dict[str, Any]] | None = None,
         l3_background: bool = False,
         on_critical_callback: Callable[[ICMReport], None] | None = None,
+        telemetry: TelemetryManager | None = None,
     ) -> None:
         self._identity = identity_layer
         self._kernel = kernel
@@ -135,6 +137,7 @@ class DivergenceEngine:
         self._policy_resolver = policy_resolver
         self._l3_background = l3_background
         self._on_critical_callback = on_critical_callback
+        self._telemetry = telemetry or TelemetryManager(enabled=True)
         
         # Base thresholds
         self._base_l1_threshold = l1_threshold
@@ -164,6 +167,11 @@ class DivergenceEngine:
         self._pending_tasks: set[asyncio.Task[ICMReport]] = set()
 
     @property
+    def telemetry(self) -> TelemetryManager:
+        """Returns the engine's TelemetryManager."""
+        return self._telemetry
+
+    @property
     def circuit_breaker_tripped(self) -> bool:
         """True if a critical L3 report tripped the engine's circuit breaker flag."""
         return self._circuit_breaker_tripped
@@ -182,6 +190,10 @@ class DivergenceEngine:
         self._last_l3_report = report
         if not report.is_healthy:
             self._circuit_breaker_tripped = True
+            self._telemetry.record_policy_blocked(
+                reason="l3_icm_unhealthy",
+                attributes={"health_score": report.health_score, "template": self._template},
+            )
             logger.error(
                 f"Critical L3 ICM failure detected (health={report.health_score:.1%}). "
                 f"Circuit breaker flag tripped."
@@ -247,6 +259,19 @@ class DivergenceEngine:
 
     # ── Main Analysis ─────────────────────────────────────────────────────────────
 
+    def _emit_telemetry(self, result: DivergenceResult) -> None:
+        blocked = bool(result.cascade_blocked or result.action_required or result.tier == DivergenceTier.CRITICAL)
+        self._telemetry.record_divergence(
+            l1_score=result.l1_score,
+            tier=result.tier.value,
+            blocked=blocked,
+            attributes={
+                "template": self._template,
+                "kernel": getattr(self._kernel, "name", "default"),
+                "provider": self._provider or "unknown",
+            },
+        )
+
     def analyze(
         self,
         request_text: str,
@@ -264,9 +289,19 @@ class DivergenceEngine:
                 self._scheduler.calculate_thresholds(interaction_count)
             )
 
-        if self._enterprise:
-            return self._enterprise_analyze(request_text, response_text, skip_l3=skip_l3)
-        return self._standard_analyze(request_text, response_text, skip_l3=skip_l3)
+        with self._telemetry.span(
+            "ct.divergence.analyze",
+            attributes={"ct.template": self._template, "ct.provider": self._provider or "unknown"},
+        ) as span_attrs:
+            if self._enterprise:
+                result = self._enterprise_analyze(request_text, response_text, skip_l3=skip_l3)
+            else:
+                result = self._standard_analyze(request_text, response_text, skip_l3=skip_l3)
+            span_attrs["ct.divergence.l1_score"] = result.l1_score
+            span_attrs["ct.divergence.tier"] = result.tier.value
+            span_attrs["ct.policy.blocked"] = bool(result.cascade_blocked or result.action_required)
+            self._emit_telemetry(result)
+            return result
 
     async def aanalyze(
         self,
@@ -283,9 +318,19 @@ class DivergenceEngine:
                 self._scheduler.calculate_thresholds(interaction_count)
             )
 
-        if self._enterprise:
-            return await self._aenterprise_analyze(request_text, response_text, skip_l3=skip_l3)
-        return await self._astandard_analyze(request_text, response_text, skip_l3=skip_l3)
+        with self._telemetry.span(
+            "ct.divergence.analyze",
+            attributes={"ct.template": self._template, "ct.provider": self._provider or "unknown"},
+        ) as span_attrs:
+            if self._enterprise:
+                result = await self._aenterprise_analyze(request_text, response_text, skip_l3=skip_l3)
+            else:
+                result = await self._astandard_analyze(request_text, response_text, skip_l3=skip_l3)
+            span_attrs["ct.divergence.l1_score"] = result.l1_score
+            span_attrs["ct.divergence.tier"] = result.tier.value
+            span_attrs["ct.policy.blocked"] = bool(result.cascade_blocked or result.action_required)
+            self._emit_telemetry(result)
+            return result
 
     def get_drift_report(self, window_size: int = 50, model: str | None = None) -> DriftReport | None:
         """
