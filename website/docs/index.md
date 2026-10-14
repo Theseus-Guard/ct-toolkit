@@ -18,12 +18,14 @@ CT Toolkit is an open-source security layer that prevents **Sequential Self-Comp
 
     ```bash
     pip install ct-toolkit
+    # Or with CLI, Web Dashboard, Enterprise & Observability extras:
+    pip install "ct-toolkit[all]"
     ```
 
 === "uv (recommended)"
 
     ```bash
-    uv add ct-toolkit
+    uv add "ct-toolkit[all]"
     ```
 
 === "from source"
@@ -31,7 +33,7 @@ CT Toolkit is an open-source security layer that prevents **Sequential Self-Comp
     ```bash
     git clone https://github.com/Theseus-Guard/ct-toolkit
     cd ct-toolkit
-    pip install -e "."
+    pip install -e ".[all]"
     ```
 
 </div>
@@ -58,12 +60,20 @@ CT Toolkit is an open-source security layer that prevents **Sequential Self-Comp
 # Before
 # response = openai.OpenAI().chat.completions.create(...)
 
-# After — guardrails, drift detection, and audit log, all automatic
+# After — sync (`chat`), async (`achat`), and streaming (`stream=True`) guardrails
 client = TheseusWrapper(provider="openai")
 
 response = client.chat("What are your core values?")
 print(f"Divergence Score: {response.divergence_score:.4f}")  # 0.0 = aligned, 1.0 = drifted
 ```
+
+---
+
+## Audit & Telemetry Dashboard (CLI & Web UI)
+
+Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, and staged sandbox rules in your terminal (`ct-toolkit status`) or via the local interactive Web Audit Dashboard (`ct-toolkit dashboard --web`):
+
+![CT Toolkit Web Audit & Telemetry Dashboard](assets/ct_toolkit_web_dashboard.png)
 
 ---
 
@@ -78,34 +88,34 @@ print(f"Divergence Score: {response.divergence_score:.4f}")  # 0.0 = aligned, 1.
     <p><a href="concepts/kernels/">Learn about Kernels</a></p>
   </li>
   <li>
-    <p><strong>3-Tier Divergence Engine</strong></p>
+    <p><strong>3-Tier Contrastive Divergence Engine</strong></p>
     <hr />
-    <p>Layered monitoring from zero-cost L1 embeddings to full L3 identity probes. Detect and block identity drift before it becomes systemic.</p>
+    <p>Layered monitoring from contrastive L1 embeddings (positive + negative anchors) to non-blocking background L3 identity probes with automatic circuit breaking.</p>
     <p><a href="concepts/divergence/">Understand Divergence</a></p>
   </li>
   <li>
-    <p><strong>Hierarchical Safety</strong></p>
+    <p><strong>Hierarchical & Distributed Safety</strong></p>
     <hr />
-    <p>Mother agent constraints propagate to sub-agents as read-only axioms. Prevent small orchestrator deviations from cascading into massive fleet-wide drift.</p>
+    <p>Mother agent constraints propagate to sub-agents in-process or via HMAC-SHA256 signed HTTP headers as read-only axioms.</p>
     <p><a href="concepts/multi-agent/">Explore Multi-Agent Safety</a></p>
   </li>
   <li>
-    <p><strong>Cryptographic Provenance</strong></p>
+    <p><strong>Cryptographic Provenance & OTel</strong></p>
     <hr />
-    <p>Every interaction is signed with HMAC-SHA256 and chained. Provide a regulator-ready audit trail of your agent's identity continuity.</p>
+    <p>Every interaction is signed with HMAC-SHA256 and chained in SQLite or PostgreSQL, paired with OpenTelemetry spans and metrics.</p>
     <p><a href="concepts/provenance/">View Compliance Tools</a></p>
   </li>
   <li>
     <p><strong>Framework Middleware</strong></p>
     <hr />
-    <p>Drop-in support for LangChain, CrewAI, and AutoGen. Add identity protection to your existing agent stack without rewriting a single chain.</p>
+    <p>Drop-in support for LangChain, Deep Agents, CrewAI, and AutoGen. Add identity protection to your existing agent stack without rewriting a single chain.</p>
     <p><a href="integrations/">Browse Integrations</a></p>
   </li>
   <li>
-    <p><strong>Production Ready</strong></p>
+    <p><strong>CLI & Interactive Web Dashboard</strong></p>
     <hr />
-    <p>Tested with latest frontier models and local endpoints. 90%+ test coverage and enterprise-grade security defaults.</p>
-    <p><a href="reference/project-status/">Project Roadmap</a></p>
+    <p>Monitor provenance chains, divergence tiers, and sandbox cooldowns via Rich CLI or the localhost-bound Web Audit Dashboard.</p>
+    <p><a href="guides/cli-auditor/">Explore CLI & Web UI</a></p>
   </li>
 </ul>
 
@@ -131,8 +141,9 @@ print(f"Divergence Score: {response.divergence_score:.4f}")  # 0.0 = aligned, 1.
 
 | Metric        | Status                                                                                                                                                                                                              |
 | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Tests**     | ✅ 293/296 passing                                                                                                                                                                                                  |
-| **Coverage**  | ✅ 89%                                                                                                                                                                                                              |
+| **Version**   | ✅ `v0.3.40`                                                                                                                                                                                                        |
+| **Tests**     | ✅ 426 passed, 3 skipped                                                                                                                                                                                            |
+| **Coverage**  | ✅ 90%+                                                                                                                                                                                                             |
 | **PyPI**      | ✅ `pip install ct-toolkit`                                                                                                                                                                                         |
 | **Downloads** | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
 | **License**   | Apache 2.0                                                                                                                                                                                                          |

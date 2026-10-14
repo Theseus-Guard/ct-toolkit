@@ -19,53 +19,60 @@ wrapper = TheseusWrapper(provider="openai", config=config)
 
 ## All parameters
 
-### Identity
+### Identity & Semantic Rule Validation
 
-| Parameter       | Type                           | Default     | Description                                                                 |
-| :-------------- | :----------------------------- | :---------- | :-------------------------------------------------------------------------- |
-| `template`      | `str`                          | `"general"` | Identity template name. Defines the embedding reference vector.             |
-| `kernel_name`   | `str`                          | `"default"` | Constitutional Kernel to load. Built-ins: `default`, `defense`, `finance`.  |
-| `kernel_path`   | `str \| Path \| None`          | `None`      | Explicit path to a custom kernel YAML. Overrides `kernel_name`.             |
-| `project_root`  | `str \| Path \| None`          | `None`      | Path to your project root. CT Toolkit looks for `config/*.yaml` here.       |
-| `parent_kernel` | `ConstitutionalKernel \| None` | `None`      | Propagated kernel from a parent agent. Its anchors become read-only axioms. |
+| Parameter                            | Type                           | Default     | Description                                                                                 |
+| :----------------------------------- | :----------------------------- | :---------- | :------------------------------------------------------------------------------------------ |
+| `template`                           | `str`                          | `"general"` | Identity template name. Defines positive reference and negative anchor vectors.             |
+| `kernel_name`                        | `str`                          | `"default"` | Constitutional Kernel to load. Built-ins: `default`, `defense`, `finance`.                  |
+| `kernel_path`                        | `str \| Path \| None`          | `None`      | Explicit path to a custom kernel YAML. Overrides `kernel_name`.                             |
+| `project_root`                       | `str \| Path \| None`          | `None`      | Path to your project root. CT Toolkit looks for `config/*.yaml` here.                       |
+| `parent_kernel`                      | `ConstitutionalKernel \| None` | `None`      | Propagated kernel from a parent agent. Its anchors become read-only axioms.                 |
+| `rule_conflict_similarity_threshold` | `float`                        | `0.78`      | Cosine similarity threshold for semantic rule conflict detection when embeddings are used.  |
 
-### Divergence thresholds
+### Divergence thresholds & Background Circuit Breaker
 
-| Parameter                 | Type    | Default | Description                                                 |
-| :------------------------ | :------ | :------ | :---------------------------------------------------------- |
-| `divergence_l1_threshold` | `float` | `0.15`  | L1 ECS score above which an `l1_warning` is issued.         |
-| `divergence_l2_threshold` | `float` | `0.30`  | L1 score above which the L2 LLM-as-judge path is triggered. |
-| `divergence_l3_threshold` | `float` | `0.50`  | L1 score above which the L3 ICM battery is triggered.       |
+| Parameter                      | Type    | Default | Description                                                                                 |
+| :----------------------------- | :------ | :------ | :------------------------------------------------------------------------------------------ |
+| `divergence_l1_threshold`      | `float` | `0.15`  | L1 Contrastive ECS score above which an `l1_warning` is issued.                             |
+| `divergence_l2_threshold`      | `float` | `0.30`  | L1 score above which the L2 LLM-as-judge path is triggered.                                 |
+| `divergence_l3_threshold`      | `float` | `0.50`  | L1 score above which the L3 ICM battery is triggered.                                       |
+| `l3_background_execution`      | `bool`  | `True`  | Run L3 ICM probe batteries asynchronously in the background without blocking latency.       |
+| `l3_circuit_breaker_threshold` | `int`   | `2`     | Consecutive failed L3 probe runs required to trip the circuit breaker and block requests.   |
+| `shadow_background_execution`  | `bool`  | `True`  | Run Staged Approval shadow requests asynchronously in the background.                       |
 
 !!! tip "Stricter thresholds for critical systems"
-For medical, financial, or defense applications, use tighter thresholds:
-`python
+    For medical, financial, or defense applications, use tighter thresholds:
+    ```python
     config = WrapperConfig(
         divergence_l1_threshold=0.10,
         divergence_l2_threshold=0.20,
         divergence_l3_threshold=0.40,
     )
-    `
+    ```
 
 ### Judge and embedding clients
 
-| Parameter          | Type   | Default                    | Description                                                                        |
-| :----------------- | :----- | :------------------------- | :--------------------------------------------------------------------------------- |
-| `judge_client`     | `Any`  | `None`                     | Separate LLM client for L2/L3 analysis.                                            |
-| `judge_provider`   | `str`  | `None`                     | Explicit provider for judge calls (for example, `"ollama"`).                       |
-| `judge_model`      | `str`  | `None`                     | Explicit model for judge calls (shared by L2 and L3 judge paths).                  |
-| `embedding_client` | `Any`  | `None`                     | Client for real embedding API calls (L1). Falls back to keyword vectors if `None`. |
-| `embedding_model`  | `str`  | `"text-embedding-3-small"` | Embedding model name.                                                              |
-| `strict_embedding` | `bool` | `False`                    | If `True`, raises `RuntimeError` when embedding API fails instead of falling back. |
+| Parameter            | Type          | Default                    | Description                                                                                        |
+| :------------------- | :------------ | :------------------------- | :------------------------------------------------------------------------------------------------- |
+| `judge_client`       | `Any`         | `None`                     | Separate LLM client for L2/L3 analysis.                                                            |
+| `judge_provider`     | `str \| None` | `None`                     | Explicit provider for judge calls (for example, `"ollama"`).                                       |
+| `judge_model`        | `str \| None` | `None`                     | Explicit model for judge calls (shared by L2 and L3 judge paths).                                  |
+| `embedding_provider` | `str \| None` | `None`                     | Embedding backend: `"litellm"`, `"ollama"`, `"fastembed"`, `"openai"`, or `"local"`.               |
+| `embedding_client`   | `Any`         | `None`                     | Client for real embedding API calls (L1). Falls back to keyword vectors if `None`.                 |
+| `embedding_model`    | `str`         | `"text-embedding-3-small"` | Embedding model name (e.g. `"BAAI/bge-small-en-v1.5"` for FastEmbed or `"nomic-embed-text"`).      |
+| `strict_embedding`   | `bool`        | `False`                    | If `True`, raises `RuntimeError` when embedding API fails instead of falling back.                 |
 
-### Provenance & logging
+### Provenance, Database Vault & OpenTelemetry
 
-| Parameter            | Type   | Default                | Description                                                          |
-| :------------------- | :----- | :--------------------- | :------------------------------------------------------------------- |
-| `vault_type`         | `str`  | `"local"`              | Storage backend. Currently only `"local"` (SQLite) is supported.     |
-| `vault_path`         | `str`  | `"./ct_provenance.db"` | Path to the SQLite provenance database.                              |
-| `log_requests`       | `bool` | `True`                 | Whether to write every interaction to the provenance log.            |
-| `auto_inject_kernel` | `bool` | `True`                 | Whether to inject kernel rules into the system prompt automatically. |
+| Parameter            | Type          | Default                | Description                                                                             |
+| :------------------- | :------------ | :--------------------- | :-------------------------------------------------------------------------------------- |
+| `vault_type`         | `str`         | `"local"`              | Storage backend (`"local"` for SQLite or `"sqlalchemy"` when `vault_url` is set).       |
+| `vault_path`         | `str`         | `"./ct_provenance.db"` | Path to the SQLite provenance database.                                                 |
+| `vault_url`          | `str \| None` | `None`                 | SQLAlchemy database URL (e.g. `"postgresql+psycopg2://user:pass@host:5432/db"`).        |
+| `log_requests`       | `bool`        | `True`                 | Whether to write every interaction to the provenance log.                               |
+| `auto_inject_kernel` | `bool`        | `True`                 | Whether to inject kernel rules into the system prompt automatically.                    |
+| `otel_enabled`       | `bool`        | `False`                | Emit OpenTelemetry traces (`ct.chat`, `ct.divergence.*`) and metrics when enabled.      |
 
 ### Auto-correction loop
 
@@ -171,7 +178,7 @@ config = WrapperConfig(
 
 Enables simultaneous L1, L2, and L3 scanning to ensure maximum identity alignment:
 
-`rigorous_mode` is the preferred flag. `enterprise_mode` is still accepted for backward compatibility but is deprecated and may be removed in a future release.
+`rigorous_mode` is the preferred flag. `enterprise_mode` is still accepted for backward compatibility.
 
 ```python
 config = WrapperConfig(
@@ -181,7 +188,7 @@ config = WrapperConfig(
 )
 ```
 
-In enterprise mode, a combined risk score is calculated:
+In rigorous mode, a combined risk score is calculated:
 
 ```
 risk = l1_score
@@ -189,50 +196,4 @@ risk = l1_score
      + ((1 - l3_health) × 0.4  if L3 ran)
 
 action_required = risk >= l3_threshold OR L3 not healthy
-```
-
----
-
-## Full example
-
-```python
-import openai
-from ct_toolkit import TheseusWrapper, WrapperConfig
-from ct_toolkit.divergence.scheduler import RiskProfile
-
-judge = openai.OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")  # Can be a different provider/endpoint
-
-config = WrapperConfig(
-    # Identity
-    template="medical",
-    kernel_name="medical",
-
-    # Strict thresholds for clinical use
-    divergence_l1_threshold=0.10,
-    divergence_l2_threshold=0.20,
-    divergence_l3_threshold=0.40,
-
-    # Use a separate judge model
-    judge_client=judge,
-    judge_provider="ollama",
-    judge_model="mistral",
-
-    # Vault
-    vault_path="./clinical_provenance.db",
-    log_requests=True,
-
-    # Auto-correction
-    auto_correction=True,
-    max_correction_retries=1,
-
-    # Drift alerting
-    drift_alert_callback=lambda p: print(f"CLINICAL ALERT: {p}"),
-
-    # Risk-adjusted elasticity
-    elasticity_max_thresholds=(0.20, 0.40, 0.60),
-    elasticity_growth_rate=0.0005,
-    risk_profile=RiskProfile(has_tool_calling=True),
-)
-
-wrapper = TheseusWrapper(provider="openai", config=config)
 ```

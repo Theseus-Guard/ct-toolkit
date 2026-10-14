@@ -1,15 +1,17 @@
-# Standalone Auditor CLI
+# Auditor CLI & Web Telemetry Dashboard
 
-The **CT Toolkit CLI** provides a powerful way to audit LLM endpoints for identity continuity without writing any Python code. It's designed for security researchers, auditors, and developers who need to stress-test a model's alignment with a specific [Constitutional Kernel](../concepts/kernels.md).
+The **CT Toolkit CLI** (`ct-toolkit`) provides both a **Rich terminal interface** and an **Interactive Web Audit & Telemetry Dashboard** (`--web`) for inspecting cryptographic provenance logs, L1/L2/L3 divergence tiers, and running standalone endpoint audits without writing Python code.
+
+![CT Toolkit Web Audit & Telemetry Dashboard](../assets/ct_toolkit_web_dashboard.png)
 
 ---
 
 ## Installation
 
-The CLI is included automatically when you install the toolkit:
+Install CT Toolkit with the CLI and Server extras:
 
 ```bash
-pip install ct-toolkit
+pip install "ct-toolkit[cli,server]"
 ```
 
 Verify the installation:
@@ -20,11 +22,70 @@ ct-toolkit --help
 
 ---
 
-## Core Commands
+## 1. Interactive Web Audit & Telemetry Dashboard (`dashboard --web`)
 
-### `audit`
+Launch the modern web dashboard on `localhost`:
 
-Run an L3 Identity Consistency Metric (ICM) audit against an LLM provider.
+```bash
+ct-toolkit dashboard --web --vault ./ct_provenance.db --port 8001
+```
+
+Open **`http://127.0.0.1:8001/dashboard`** in your browser.
+
+### Web UI Capabilities
+
+- **Live Auto-Refresh**: Polls `/api/dashboard/status` every 5 seconds with a one-click pause/resume toggle.
+- **Cryptographic Chain Status**: Real-time HMAC-SHA256 verification badge (`VALID` vs. `TAMPERED`), verified entry counter, average/max divergence score meter, and active staged cooldown counter.
+- **Divergence Tier Breakdown**: Visual stacked bar and proportional breakdown of `OK`, `L1_WARNING`, `L2_JUDGE`, and `L3_ICM` tiers.
+- **Interactive Log Explorer**: Filter provenance records by tier (`All`, `OK`, `L1`, `L2`, `L3`) and click any row to inspect full request/response SHA-256 hashes, previous entry hashes, and JSON metadata.
+
+### Localhost-First Security Architecture
+
+- **Bound to `127.0.0.1` by Default**: Only accessible from your local machine unless explicitly configured otherwise.
+- **Fail-Closed Non-Loopback Protection**: Binding to `0.0.0.0` or a non-loopback IP without `--api-key` (or `CT_SERVER_API_KEY`) is rejected at startup (`ValueError`). Non-loopback client requests are rejected with `403 Forbidden` when no API key is set.
+- **Credential & Path Redaction**: Database passwords in `--vault-url` are masked (`***`) and local filesystem paths are reduced to basenames (`ct_provenance.db`).
+
+---
+
+## 2. Terminal Telemetry (`ct-toolkit status` / `dashboard`)
+
+To inspect your provenance chain directly inside the terminal:
+
+```bash
+# Local SQLite vault
+ct-toolkit status --vault ./ct_provenance.db --limit 10
+
+# Enterprise PostgreSQL / SQLAlchemy vault
+ct-toolkit status --vault-url "postgresql+psycopg2://user:pass@localhost:5432/ct_audit"
+```
+
+```text
+$ ct-toolkit status
+
+  _______ _    _ ______  _____ ______ _    _  _____    _____ _    _          _____  _____  
+ |__   __| |  | |  ____|/ ____|  ____| |  | |/ ____|  / ____| |  | |   /\   |  __ \|  __ \ 
+    | |  | |__| | |__  | (___ | |__  | |  | | (___   | |  __| |  | |  /  \  | |__) | |  | |
+    | |  |  __  |  __|  \___ \|  __| | |  | |\___ \  | | |_ | |  | | / /\ \ |  _  /| |  | |
+    | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
+    |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
+
+  Computational Theseus Toolkit (CT Toolkit) v0.3.40
+  Identity Continuity Guardrails for Agentic Systems
+
+╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
+│ Vault: ./ct_provenance.db (local)                                            │
+│ Chain Integrity: VALID (HMAC Verified)                                       │
+│ Verified Active Entries: 4 (showing last 4)                                  │
+│ Divergence Score (Avg / Max): 0.1525 / 0.3800                                │
+│ Head Hash: 9c64cb51a479c52c207b7fa8c3197a75...                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+---
+
+## 3. Standalone Endpoint Auditor (`ct-toolkit audit`)
+
+Run an L3 Identity Consistency Metric (ICM) audit against any LLM provider.
 
 **Usage:**
 
@@ -45,61 +106,34 @@ ct-toolkit audit --url <PROVIDER_URL> --kernel <KERNEL_NAME> [OPTIONS]
 ct-toolkit audit --url http://localhost:11434/v1 --kernel defense
 ```
 
-### `list-kernels`
+---
 
-List all available Constitutional Kernels installed in the toolkit or your local project.
-
-```bash
-ct-toolkit list-kernels
-```
+## 4. Other CLI Commands
 
 ### `serve`
 
-Start a FastAPI server for LiteLLM [Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api).
+Start a FastAPI guardrail and dashboard server implementing the LiteLLM [Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) (`/v1/analyze`) and Web Dashboard (`/dashboard`):
 
 ```bash
-ct-toolkit serve --kernel <KERNEL_NAME> --port <PORT>
+ct-toolkit serve --kernel defense --host 127.0.0.1 --port 8001
 ```
 
-### `list-templates`
+### `list-kernels` & `list-templates`
 
-List all available Identity Templates (categories for behavioral probes).
+List all available Constitutional Kernels and Identity Templates:
 
 ```bash
+ct-toolkit list-kernels
 ct-toolkit list-templates
 ```
 
----
+### `setup`
 
-## ASCII Banner & Versioning
+Download a SHA-256 verified profile from the official repository:
 
-Upon startup, the CLI greets you with the **Theseus Guard** banner, ensuring you are operating within the CT Toolkit environment:
-
-```text
-  _______ _    _ ______  _____ ______ _    _  _____    _____ _    _
- |__   __| |  | |  ____|/ ____|  ____| |  | |/ ____|  / ____| |  | |   /\
-    | |  | |__| | |__  | (___ | |__  | |  | | (___   | |  __| |  | |  /  \
-    | |  |  __  |  __|  \___ \|  __| | |  | |\___ \  | | |_ | |  | | / /\ \
-    | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \
-    |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\
-
-  computational theseus toolkit (ct toolkit) v0.3.20
-  identity continuity guardrails for agentic systems
+```bash
+ct-toolkit setup personal_kernel --dest ./config
 ```
-
----
-
-## Example Output
-
-When an audit runs, the CLI provides a detailed table of results and a final **Identity Health Score**:
-
-_(Representative screenshot removed from docs assets. Run `ct-toolkit audit ...` to see the live terminal table output with PASSED/FAILED probe rows.)_
-
-### Interpreting Results:
-
-- **Health Score**: 0% to 100%. A score below 80% usually indicates significant [Identity Drift](../concepts/identity-continuity.md).
-- **Risk Level**: Categorized as LOW, MEDIUM, HIGH, or CRITICAL based on the severity of failed probes.
-- **Critical Violations**: Lists specific probes that violated non-negotiable axiomatic anchors.
 
 ---
 
@@ -107,4 +141,4 @@ _(Representative screenshot removed from docs assets. Run `ct-toolkit audit ...`
 
 - **Connection Error**: Ensure your LLM provider (Ollama, LM Studio, etc.) is running and accessible at the provided URL.
 - **Kernel Not Found**: Use `ct-toolkit list-kernels` to verify you are using a valid kernel name.
-- **Empty Probes**: Ensure the `ct_toolkit/divergence/probes/` directory contains valid `.json` probe files.
+- **Non-Loopback Bind Error**: Always supply `--api-key` or set `CT_SERVER_API_KEY` if binding `serve` or `dashboard --web` to a non-loopback address (`0.0.0.0`).
