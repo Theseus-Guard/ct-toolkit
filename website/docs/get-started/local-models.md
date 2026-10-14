@@ -91,7 +91,7 @@ import openai
 from ct_toolkit import TheseusWrapper, WrapperConfig
 
 LM_STUDIO_URL = "http://localhost:1234/v1"
-LLM_MODEL     = "qwen/qwen3-coder-30b"
+LLM_MODEL     = "unsloth/qwen3.5-9B"
 EMBED_MODEL   = "text-embedding-qwen3-embedding-0.6b"
 
 base_client = openai.OpenAI(
@@ -143,7 +143,7 @@ The keyword fallback is sufficient for basic drift detection. For production dep
 | `llama3`               | Ollama    | Fully tested, good baseline       |
 | `mistral`              | Ollama    | Fast, good for L2/L3 judge paths  |
 | `qwen2.5:7b`           | Ollama    | Strong reasoning chain support    |
-| `qwen/qwen3-coder-30b` | LM Studio | Tested with `<think>` tag parsing |
+| `unsloth/qwen3.5-9B` | LM Studio | Tested with `<think>` tag parsing |
 | `phi3`                 | Ollama    | Lightweight, good for sub-agents  |
 
 ---

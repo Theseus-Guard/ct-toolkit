@@ -16,7 +16,7 @@ from ct_toolkit import TheseusWrapper, WrapperConfig
 from ct_toolkit.core.kernel import AxiomaticAnchor
 
 LM_STUDIO_URL = "http://172.20.10.9:11434/v1"
-LLM_MODEL     = "qwen/qwen3-coder-30b"
+LLM_MODEL     = "unsloth/qwen3.5-9B"
 EMBED_MODEL   = "text-embedding-qwen3-embedding-0.6b"
 
 base_client = openai.OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
@@ -91,6 +91,6 @@ print(f"Hallucinated:  similarity={result_b['similarity']:.4f}, drift={result_b[
 ```
 
 !!! info "Live test"
-    This scenario was verified on a live LM Studio instance using `qwen/qwen3-coder-30b` for logic and `text-embedding-qwen3-embedding-0.6b` for identity scoring.
+    This scenario was verified on a live LM Studio instance using `unsloth/qwen3.5-9B` for logic and `text-embedding-qwen3-embedding-0.6b` for identity scoring.
 
 Full source: [`examples/test_deepagents_ssc.py`](https://github.com/Theseus-Guard/ct-toolkit/blob/main/examples/test_deepagents_ssc.py)

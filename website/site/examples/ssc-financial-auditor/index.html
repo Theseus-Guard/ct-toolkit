@@ -2561,7 +2561,7 @@
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ct_toolkit.core.kernel</span><span class="w"> </span><span class="kn">import</span> <span class="n">AxiomaticAnchor</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">LM_STUDIO_URL</span> <span class="o">=</span> <span class="s2">&quot;http://172.20.10.9:11434/v1&quot;</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">LLM_MODEL</span>     <span class="o">=</span> <span class="s2">&quot;qwen/qwen3-coder-30b&quot;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">LLM_MODEL</span>     <span class="o">=</span> <span class="s2">&quot;unsloth/qwen3.5-9B&quot;</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">EMBED_MODEL</span>   <span class="o">=</span> <span class="s2">&quot;text-embedding-qwen3-embedding-0.6b&quot;</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">base_client</span> <span class="o">=</span> <span class="n">openai</span><span class="o">.</span><span class="n">OpenAI</span><span class="p">(</span><span class="n">base_url</span><span class="o">=</span><span class="n">LM_STUDIO_URL</span><span class="p">,</span> <span class="n">api_key</span><span class="o">=</span><span class="s2">&quot;lm-studio&quot;</span><span class="p">)</span>
@@ -2646,7 +2646,7 @@
 </span></code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Live test</p>
-<p>This scenario was verified on a live LM Studio instance using <code>qwen/qwen3-coder-30b</code> for logic and <code>text-embedding-qwen3-embedding-0.6b</code> for identity scoring.</p>
+<p>This scenario was verified on a live LM Studio instance using <code>unsloth/qwen3.5-9B</code> for logic and <code>text-embedding-qwen3-embedding-0.6b</code> for identity scoring.</p>
 </div>
 <p>Full source: <a href="https://github.com/Theseus-Guard/ct-toolkit/blob/main/examples/test_deepagents_ssc.py"><code>examples/test_deepagents_ssc.py</code></a></p>
 
