@@ -106,13 +106,16 @@ print(response.content)
 print(f"Divergence Score: {response.divergence_score}")
 ```
 
-### 🔍 Standalone Auditor & Dashboard (CLI)
+### 🔍 Standalone Auditor & Dashboard (CLI & Web UI)
 
-Audit any LLM endpoint (OpenAI, Ollama, LM Studio) and inspect your provenance chain directly from your terminal:
+Audit any LLM endpoint (OpenAI, Ollama, LM Studio) and inspect your provenance chain directly from your terminal or in the interactive Web Audit Dashboard:
 
 ```bash
-# View Provenance Chain integrity, L1/L2/L3 tier breakdown, and staged rules
+# View Provenance Chain integrity, L1/L2/L3 tier breakdown, and staged rules in terminal
 ct-toolkit status --vault ./ct_provenance.db
+
+# Launch the interactive Web Audit & Telemetry Dashboard at http://127.0.0.1:8001/dashboard
+ct-toolkit dashboard --web --vault ./ct_provenance.db --port 8001
 
 # Audit a local Ollama model
 ct-toolkit audit --url http://localhost:11434/v1 --kernel defense

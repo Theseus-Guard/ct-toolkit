@@ -236,3 +236,81 @@ def test_cli_status_and_dashboard(tmp_path: Path) -> None:
     )
     assert tampered_result.exit_code == 1
     assert "COMPROMISED" in tampered_result.stdout
+
+
+def test_web_dashboard_ui_and_telemetry_api(tmp_path: Path) -> None:
+    """Web Audit Dashboard serves interactive HTML at /dashboard and JSON telemetry at /api/dashboard/status."""
+    from ct_toolkit import server
+    from ct_toolkit.server import app as fastapi_app, configure_dashboard_vault, configure_server_auth
+
+    db_path = tmp_path / "web_dashboard.db"
+    prov = ProvenanceLog(vault_path=str(db_path))
+    prov.record(
+        request_text="Check kernel alignment",
+        response_text="Aligned with constitutional axioms.",
+        divergence_score=0.06,
+        metadata={"kernel": "general", "tier": "ok", "model": "gpt-4o-mini"},
+    )
+    prov.record(
+        request_text="Borderline request",
+        response_text="Responding cautiously.",
+        divergence_score=0.34,
+        metadata={"kernel": "general", "tier": "l2_judge", "model": "gpt-4o-mini"},
+    )
+    prov.record(
+        request_text="Stage rule",
+        response_text="Staged",
+        divergence_score=0.0,
+        metadata={
+            "event_type": "reflective_endorsement",
+            "decision": "staged",
+            "endorsement_id": "web-rule-001",
+            "commitment_id": "axiom_1",
+            "rule_text": "Always verify cryptographic signatures.",
+            "cooldown_until": time.time() + 1800,
+        },
+    )
+
+    prev_wrapper = server._wrapper_instance
+    server._wrapper_instance = None
+    configure_server_auth(None)
+    configure_dashboard_vault(vault_path=str(db_path), vault_type="local")
+
+    try:
+        client = TestClient(fastapi_app)
+
+        # 1. HTML Dashboard page
+        html_resp = client.get("/dashboard")
+        assert html_resp.status_code == 200
+        assert "text/html" in html_resp.headers["content-type"]
+        assert "Computational Theseus Toolkit" in html_resp.text
+        assert "/api/dashboard/status" in html_resp.text
+
+        # 2. JSON Telemetry API
+        api_resp = client.get("/api/dashboard/status")
+        assert api_resp.status_code == 200
+        data = api_resp.json()
+        assert data["chain_ok"] is True
+        assert data["verified_count"] == 3
+        assert data["tier_counts"]["ok"] == 1
+        assert data["tier_counts"]["l2_judge"] == 1
+        assert len(data["staged_rules"]) == 1
+        assert data["staged_rules"][0]["endorsement_id"] == "web-rule-001"
+        assert data["staged_rules"][0]["status"] == "ACTIVE_COOLDOWN"
+        assert len(data["score_series"]) == 2
+        assert len(data["recent_entries"]) == 2
+
+        # 3. Tamper detection in JSON Telemetry API
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute("UPDATE provenance SET divergence_score = 0.88")
+            conn.commit()
+
+        tampered_api = client.get("/api/dashboard/status")
+        assert tampered_api.status_code == 200
+        t_data = tampered_api.json()
+        assert t_data["chain_ok"] is False
+        assert t_data["tampered_entry_id"] is not None
+    finally:
+        server._wrapper_instance = prev_wrapper
+        configure_server_auth(None)
+

@@ -22,7 +22,7 @@ from rich.table import Table
 
 from ct_toolkit import TheseusWrapper, WrapperConfig, __version__
 from ct_toolkit.divergence.l3_icm import ICMRunner
-from ct_toolkit.server import start_server
+from ct_toolkit.server import start_dashboard_server, start_server
 
 app = typer.Typer(
     help="Computational Theseus Toolkit — Identity Continuity Guardrails for Agentic Systems.",
@@ -205,12 +205,14 @@ def serve(
     policy_environment: str = typer.Option("prod", "--policy-environment", help="Policy environment override (dev, test, prod)."),
     judge_provider: str = typer.Option("openai", "--judge-provider", help="LLM provider for L2/L3 judge calls."),
     judge_model: Optional[str] = typer.Option(None, "--judge-model", help="Model ID for L2/L3 judge calls."),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional Bearer token / API key for server endpoints."),
 ):
-    """Start the CT-Toolkit Guardrail Server for LiteLLM integration."""
-    console.print("Starting Guardrail Server...")
+    """Start the CT-Toolkit Guardrail & Web Audit Server."""
+    console.print("Starting Guardrail & Audit Server...")
     console.print(f"  - Kernel: [bold yellow]{kernel}[/bold yellow]")
     console.print(f"  - Template: [bold green]{template}[/bold green]")
     console.print(f"  - Bind: [bold cyan]{host}:{port}[/bold cyan]")
+    console.print(f"  - Web Audit Dashboard: [bold underline cyan]http://{host}:{port}/dashboard[/bold underline cyan]")
     
     try:
         config = WrapperConfig(
@@ -225,7 +227,7 @@ def serve(
         wrapper = TheseusWrapper(provider=judge_provider, config=config)
         
         # Start the uvicorn server
-        start_server(wrapper=wrapper, host=host, port=port)
+        start_server(wrapper=wrapper, host=host, port=port, api_key=api_key)
     except Exception as e:
         console.print(f"[bold red]Failed to start server:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -503,8 +505,24 @@ def dashboard_cmd(
     vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Path or SQLAlchemy URL to the provenance log database."),
     vault_type: str = typer.Option("local", "--vault-type", help="Vault backend type: local, postgres, sqlalchemy."),
     limit: int = typer.Option(200, "--limit", help="Maximum recent entries to analyze."),
+    web: bool = typer.Option(False, "--web", "-w", help="Launch the interactive Web Audit & Telemetry Dashboard in browser mode."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the Web Dashboard server to (when --web is used)."),
+    port: int = typer.Option(8001, "--port", help="Port to bind the Web Dashboard server to (when --web is used)."),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional Bearer token / API key for dashboard API authentication."),
 ):
-    """Alias for 'status': Display the interactive terminal audit dashboard."""
+    """Display the terminal audit dashboard or launch the interactive Web Audit Dashboard (--web)."""
+    if web:
+        console.print("🌐 Launching [bold cyan]CT Toolkit Web Audit & Telemetry Dashboard[/bold cyan]...")
+        console.print(f"  - Vault: [bold yellow]{vault_path}[/bold yellow] ({vault_type})")
+        console.print(f"  - Dashboard URL: [bold underline green]http://{host}:{port}/dashboard[/bold underline green]")
+        start_dashboard_server(
+            vault_path=vault_path,
+            vault_type=vault_type,
+            host=host,
+            port=port,
+            api_key=api_key,
+        )
+        return
     _render_status_dashboard(vault_path=vault_path, vault_type=vault_type, limit=limit)
 
 
