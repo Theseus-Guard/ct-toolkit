@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import hmac
 import os
+from pathlib import Path
+import re
 import time
 from typing import Any, Dict, List, Optional
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -32,6 +34,16 @@ _server_api_key: Optional[str] = None
 _dashboard_vault_path: str = "./ct_provenance.db"
 _dashboard_vault_type: str = "local"
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+_DB_CREDENTIAL_RE = re.compile(r"(://[^:/?#\s]+:)([^@/?#\s]+)(@)")
+
+_SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+}
+
 
 def configure_server_auth(api_key: Optional[str]) -> None:
     """Configures optional API Key / Bearer Token authentication for the guardrail server."""
@@ -46,13 +58,42 @@ def configure_dashboard_vault(vault_path: str, vault_type: str = "local") -> Non
     _dashboard_vault_type = vault_type
 
 
+def _sanitize_vault_display(vault_path: str) -> str:
+    """Redacts database passwords and strips absolute filesystem paths for safe UI display."""
+    raw = str(vault_path or "")
+    if "://" in raw:
+        return _DB_CREDENTIAL_RE.sub(r"\1***\3", raw)
+    p = Path(raw)
+    if p.is_absolute():
+        return p.name
+    return raw
+
+
+def _validate_bind_security(host: str, api_key: Optional[str]) -> None:
+    """Fail-closed: refuse binding to non-loopback interfaces unless an API key is configured."""
+    effective_key = api_key or _server_api_key or os.environ.get("CT_SERVER_API_KEY")
+    if host.strip().lower() not in _LOOPBACK_HOSTS and not effective_key:
+        raise ValueError(
+            f"Refusing to bind CT Toolkit Server to non-loopback host '{host}' without authentication. "
+            "Pass --api-key or set the CT_SERVER_API_KEY environment variable, or bind to 127.0.0.1."
+        )
+
+
 async def _verify_api_key(
+    request: Request,
     authorization: Optional[str] = Header(default=None),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> None:
-    """Validates Bearer token or X-API-Key header when server authentication is enabled."""
+    """Validates Bearer token or X-API-Key header, and restricts unauthenticated access to loopback."""
     expected_key = _server_api_key or os.environ.get("CT_SERVER_API_KEY")
+    client_host = (request.client.host if request.client else "127.0.0.1").lower()
+
     if not expected_key:
+        if client_host not in _LOOPBACK_HOSTS:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Non-localhost access requires CT_SERVER_API_KEY to be configured.",
+            )
         return
 
     provided_token: Optional[str] = None
@@ -361,7 +402,7 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
         )
 
     return {
-        "vault_path": str(vault_path),
+        "vault_path": _sanitize_vault_display(str(vault_path)),
         "vault_type": str(vault_type),
         "active_kernel": active_kernel,
         "active_template": active_template,
@@ -381,13 +422,14 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
 
 
 @app.get("/api/dashboard/status", dependencies=[Depends(_verify_api_key)])
-async def dashboard_status_api(limit: int = Query(200, ge=1, le=2000)) -> Dict[str, Any]:
+async def dashboard_status_api(limit: int = Query(200, ge=1, le=2000)) -> JSONResponse:
     """JSON Telemetry endpoint for the CT Toolkit Web Audit Dashboard."""
     try:
-        return get_dashboard_telemetry(limit=limit)
+        payload = get_dashboard_telemetry(limit=limit)
+        return JSONResponse(content=payload, headers=_SECURITY_HEADERS)
     except Exception as exc:
         logger.error(f"Dashboard status API error: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to read provenance telemetry: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to read provenance telemetry.")
 
 
 @app.get("/", include_in_schema=False)
@@ -397,9 +439,16 @@ async def root_redirect() -> RedirectResponse:
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_ui() -> HTMLResponse:
+async def dashboard_ui(request: Request) -> HTMLResponse:
     """Serves the interactive CT Toolkit Web Audit & Telemetry Dashboard."""
-    return HTMLResponse(content=_DASHBOARD_HTML)
+    expected_key = _server_api_key or os.environ.get("CT_SERVER_API_KEY")
+    client_host = (request.client.host if request.client else "127.0.0.1").lower()
+    if not expected_key and client_host not in _LOOPBACK_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Web Dashboard is restricted to localhost unless CT_SERVER_API_KEY is configured.",
+        )
+    return HTMLResponse(content=_DASHBOARD_HTML, headers=_SECURITY_HEADERS)
 
 
 _DASHBOARD_HTML = """<!DOCTYPE html>
@@ -1124,6 +1173,7 @@ def start_server(
 ):
     """Inject wrapper and start uvicorn server."""
     global _wrapper_instance
+    _validate_bind_security(host, api_key)
     _wrapper_instance = wrapper
     if api_key is not None:
         configure_server_auth(api_key)
@@ -1139,6 +1189,7 @@ def start_dashboard_server(
     api_key: Optional[str] = None,
 ) -> None:
     """Starts the standalone Web Audit & Telemetry Dashboard server."""
+    _validate_bind_security(host, api_key)
     configure_dashboard_vault(vault_path=vault_path, vault_type=vault_type)
     if api_key is not None:
         configure_server_auth(api_key)

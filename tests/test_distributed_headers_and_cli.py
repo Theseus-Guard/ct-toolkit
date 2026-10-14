@@ -279,17 +279,21 @@ def test_web_dashboard_ui_and_telemetry_api(tmp_path: Path) -> None:
     try:
         client = TestClient(fastapi_app)
 
-        # 1. HTML Dashboard page
+        # 1. HTML Dashboard page & security headers
         html_resp = client.get("/dashboard")
         assert html_resp.status_code == 200
         assert "text/html" in html_resp.headers["content-type"]
+        assert html_resp.headers.get("x-frame-options") == "DENY"
+        assert html_resp.headers.get("x-content-type-options") == "nosniff"
+        assert html_resp.headers.get("cache-control") == "no-store"
         assert "Computational Theseus Toolkit" in html_resp.text
         assert "/api/dashboard/status" in html_resp.text
 
-        # 2. JSON Telemetry API
+        # 2. JSON Telemetry API (also verifies absolute path is redacted to basename)
         api_resp = client.get("/api/dashboard/status")
         assert api_resp.status_code == 200
         data = api_resp.json()
+        assert data["vault_path"] == "web_dashboard.db"
         assert data["chain_ok"] is True
         assert data["verified_count"] == 3
         assert data["tier_counts"]["ok"] == 1
@@ -310,7 +314,18 @@ def test_web_dashboard_ui_and_telemetry_api(tmp_path: Path) -> None:
         t_data = tampered_api.json()
         assert t_data["chain_ok"] is False
         assert t_data["tampered_entry_id"] is not None
+
+        # 4. Credential redaction and non-loopback bind fail-closed check
+        assert (
+            server._sanitize_vault_display("postgresql://admin:SuperSecret123@db.internal:5432/prod")
+            == "postgresql://admin:***@db.internal:5432/prod"
+        )
+        with pytest.raises(ValueError, match="Refusing to bind CT Toolkit Server to non-loopback host"):
+            server._validate_bind_security("0.0.0.0", api_key=None)
+        server._validate_bind_security("127.0.0.1", api_key=None)
+        server._validate_bind_security("0.0.0.0", api_key="strong-token")
     finally:
         server._wrapper_instance = prev_wrapper
         configure_server_auth(None)
+
 
