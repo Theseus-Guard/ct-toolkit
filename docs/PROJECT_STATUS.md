@@ -8,7 +8,7 @@
 
 CT Toolkit is an open-source Python library that brings the **Nested Agentic Architecture (NAA)** framework — proposed in Hakan Damar's _"The Computational Theseus: Engineering Identity Continuity as a Guardrail Against Sequential Self-Compression in Multi-Agent AGI Systems"_ (2026 - 2nd edition) — into engineering practice.
 
-**Current Version:** `v0.4.0`
+**Current Version:** `v0.4.1`
 
 ### The Problem It Solves
 

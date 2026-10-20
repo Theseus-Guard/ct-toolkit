@@ -2677,12 +2677,12 @@
 </ul>
 <div class="admonition tip">
 <p class="admonition-title">Timeout &amp; Retry</p>
-<p>L2 Judge ve L3 ICM çağrıları otomatik timeout ve retry logic ile korunmaktadır:</p>
+<p>L2 Judge and L3 ICM calls are protected by automatic timeout and retry logic:</p>
 <ul>
-<li><strong>L2 Judge:</strong> 30 saniye timeout, 2 retries with exponential backoff</li>
-<li><strong>L3 ICM:</strong> 60 saniye timeout, 2 retries with exponential backoff</li>
+<li><strong>L2 Judge:</strong> 30-second timeout, 2 retries with exponential backoff</li>
+<li><strong>L3 ICM:</strong> 60-second timeout, 2 retries with exponential backoff</li>
 </ul>
-<p>Retry'ler sadece geçici hatalar için yapılır (rate limit, timeout, connection error).</p>
+<p>Retries are performed only for transient errors (rate limit, timeout, connection error).</p>
 </div>
 <h2 id="divergenceresult-fields">DivergenceResult fields<a class="headerlink" href="#divergenceresult-fields" title="Permanent link">&para;</a></h2>
 <table>

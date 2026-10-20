@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [0.4.1] - 2026-10-20
+
+### Security
+
+- **aiohttp** — Raised the minimum resolved `aiohttp` to `3.14.4` (lock resolves `3.14.5`), fixing unbounded memory/CPU consumption DoS (GHSA-2g87-pp6c-29x5, Dependabot #76), missing initial request/header timeout on servers (CVE-2026-111064 / GHSA-5wr8-gcqf-gqf3, Dependabot #75), and unenforced `Secure` attribute on shared cookies (CVE-2026-111063 / GHSA-494j-54xm-rwp3, Dependabot #74). Fixed in `>= 3.14.4`.
+- **Transitive lock refresh** — Regenerated `uv.lock`, including `yarl 1.25.1` (from 1.23.0) and other current transitive resolutions.
+
+### Validation
+
+- **Automated Tests:** `426 passed, 3 skipped`.
+
 ## [0.4.0] - 2026-10-14
 
 ### Added
