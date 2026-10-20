@@ -29,12 +29,12 @@ result = await engine.aanalyze(request_text, response_text)
 - **`l3_circuit_breaker_threshold=2`:** If consecutive background L3 runs fail or breach critical divergence thresholds, `engine.circuit_breaker_open` trips to `True` and subsequent `TheseusWrapper.chat()` / `achat()` requests raise `CriticalDivergenceError` immediately until `engine.reset_circuit_breaker()` is called.
 
 !!! tip "Timeout & Retry"
-    L2 Judge ve L3 ICM çağrıları otomatik timeout ve retry logic ile korunmaktadır:
+    L2 Judge and L3 ICM calls are protected by automatic timeout and retry logic:
     
-    - **L2 Judge:** 30 saniye timeout, 2 retries with exponential backoff
-    - **L3 ICM:** 60 saniye timeout, 2 retries with exponential backoff
+    - **L2 Judge:** 30-second timeout, 2 retries with exponential backoff
+    - **L3 ICM:** 60-second timeout, 2 retries with exponential backoff
     
-    Retry'ler sadece geçici hatalar için yapılır (rate limit, timeout, connection error).
+    Retries are performed only for transient errors (rate limit, timeout, connection error).
 
 ## DivergenceResult fields
 
