@@ -1,0 +1,235 @@
+/* ── CT Toolkit Custom Styles ─────────────────────────────── */
+
+/* Universal Colors (matching ADK/Material Defaults) */
+:root {
+  --md-primary-fg-color: #3f51b5; /* Indigo */
+  --ct-gradient: linear-gradient(135deg, #3f51b5 0%, #2196f3 100%);
+  --ct-card-bg: var(--md-default-bg-color);
+  --ct-card-border: var(--md-default-fg-color--lightest);
+}
+
+/* Hero Section */
+.ct-hero {
+  padding: 4rem 0 3rem;
+  text-align: center;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.ct-hero h1 {
+  font-size: 3.2rem;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  margin-bottom: 1.5rem;
+  background: var(--ct-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.1;
+}
+
+.ct-hero > p {
+  font-size: 1.25rem;
+  color: var(--md-default-fg-color--light);
+  line-height: 1.6;
+  margin-bottom: 2.5rem;
+}
+
+/* Install tabs in hero */
+.ct-install-tabs {
+  max-width: 780px;
+  margin: 0 auto 2.5rem;
+  text-align: left;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.ct-install-tabs .tabbed-set {
+  margin: 0 !important;
+}
+
+/* CTA buttons */
+.ct-hero .md-button {
+  margin: 0.5rem;
+  padding: 0.75rem 2rem;
+  font-weight: 700;
+  border-radius: 6px;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ct-hero .md-button:hover {
+  transform: translateY(-2px);
+}
+
+.ct-hero .md-button--primary {
+  background-color: var(--md-primary-fg-color);
+  border-color: var(--md-primary-fg-color);
+  color: #ffffff !important;
+}
+
+/* ADK-style Grid Cards (Overriding Material Defaults) */
+.grid.cards > :is(ul, ol) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.grid.cards > :is(ul, ol) > li {
+  border: 1px solid var(--ct-card-border);
+  border-radius: 12px;
+  padding: 2rem;
+  background: var(--ct-card-bg);
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.grid.cards > :is(ul, ol) > li:hover {
+  border-color: var(--md-primary-fg-color);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+  transform: translateY(-4px);
+}
+
+/* Icon styling */
+.grid.cards .twemoji,
+.grid.cards .lg {
+  font-size: 2.5rem !important;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-bottom: 1.25rem;
+  color: var(--md-primary-fg-color);
+}
+
+.grid.cards .twemoji svg {
+  fill: var(--md-primary-fg-color);
+}
+
+/* Title styling */
+.grid.cards strong,
+.grid.cards p:first-of-type strong {
+  display: block;
+  margin: 0 0 0.75rem 0 !important;
+  font-weight: 800 !important;
+  font-size: 1.25rem !important;
+  color: var(--md-default-fg-color);
+}
+
+/* Description styling */
+.grid.cards p {
+  margin: 0 0 1.5rem 0 !important;
+  font-size: 0.95rem;
+  color: var(--md-default-fg-color--light);
+  line-height: 1.6;
+  flex-grow: 1;
+}
+
+/* CTA styling */
+.grid.cards a {
+  font-weight: 700 !important;
+  color: var(--md-primary-fg-color) !important;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  margin-top: auto;
+  text-decoration: none !important;
+}
+
+.grid.cards a:after {
+  content: '→';
+  transition: transform 0.2s ease;
+}
+
+.grid.cards li:hover a:after {
+  transform: translateX(4px);
+}
+
+/* Dark Mode Specific Overrides */
+[data-md-color-scheme="slate"] .grid.cards > :is(ul, ol) > li {
+  background: #1e293b; /* Slightly lighter than pure slate for depth */
+  border-color: #334155;
+}
+
+[data-md-color-scheme="slate"] .grid.cards strong {
+  color: #f8fafc !important;
+}
+
+[data-md-color-scheme="slate"] .grid.cards p {
+  color: #94a3b8 !important;
+}
+
+/* Divider removal within cards */
+.grid.cards hr {
+  display: none;
+}
+
+/* Comparison table styling */
+.md-typeset table:not([class]) {
+  width: 100%;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: #f8fafc;
+  color: var(--md-default-fg-color);
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background-color: #1e293b;
+  color: #e2e8f0;
+}
+
+/* Code blocks refinements */
+.md-typeset .highlight code {
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+/* Provider badges */
+.provider-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5rem;
+  margin: 2rem 0;
+  opacity: 0.7;
+}
+
+.provider-badge {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Two-column side-by-side section */
+.ct-two-col {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 2.5rem;
+  align-items: start;
+  margin: 2rem 0;
+}
+
+.ct-two-col h2 {
+  margin-top: 0 !important;
+}
+
+/* Mobile Tweak */
+@media (max-width: 960px) {
+  .ct-two-col {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .ct-hero h1 {
+    font-size: 2.2rem;
+  }
+}
