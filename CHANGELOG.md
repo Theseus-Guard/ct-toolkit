@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [0.4.2] - 2026-10-24
+
+### Security
+
+- **Pillow** — Locked `pillow` to `13.0.0`, fixing 41 open Dependabot alerts (#77–#119, excluding #86 and #117), including critical heap overflows in FPX/JPEG decoding, TIFF encoder use-after-free, and Ghostscript argument injection (RCE), plus multiple decompression-bomb bypasses and DoS issues.
+- **filelock** — Locked `filelock` to `4.2.4`, fixing Dependabot #120–#122 (SQLite lock-database symlink/journal handling, Windows `SoftFileLock` oplock timeout, `ReadWriteLock` side-file issues).
+- **setuptools** — Locked `setuptools` to `84.2.1`, fixing Dependabot #117 (Windows path escape via `namespace_packages.txt`).
+- **certifi** — Locked `certifi` to `2026.10.23`, fixing Dependabot #86 (compromised emSign intermediate CA keys).
+- **Dependency overrides** — `[tool.uv] override-dependencies` pins `pillow>=13.0.0` and `filelock>=4.2.1`, because the latest `fastembed` (0.9.0) caps `pillow<13.0` and the latest `litellm` (1.106.3) caps `filelock<4.0`. Remove the overrides once upstream releases relax these caps. Published package metadata is unchanged.
+
+### Validation
+
+- **Automated Tests:** `426 passed, 3 skipped` (`uv run --locked --all-extras pytest tests`).
+- **Smoke Tests:** FastEmbed embedding (`BAAI/bge-small-en-v1.5`), LiteLLM import, FileLock acquire/release, and Pillow PNG roundtrip.
+
 ## [0.4.1] - 2026-10-20
 
 ### Security

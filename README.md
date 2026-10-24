@@ -20,7 +20,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.4.1
+  Computational Theseus Toolkit (CT Toolkit) v0.4.2
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
@@ -147,7 +147,7 @@ The L2 judge does not evaluate Jinja2 expressions in user requests or model resp
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Tests**        | ✅ 426 passed, 3 skipped (100% success rate, 90%+ coverage)                                                                                                                                                         |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
-| **Last Phase**   | ✅ v0.4.1: aiohttp 3.14.5 DoS/header-timeout/cookie-Secure fixes (Dependabot #74-76)                                                                                                                     |
+| **Last Phase**   | ✅ v0.4.2: Pillow 13.0.0, filelock 4.2.4, setuptools 84.2.1, certifi 2026.10.23 security fixes (Dependabot #77-122, #86, #117)                                                                                                                     |
 
 ### Framework & Model Support
 

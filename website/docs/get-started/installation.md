@@ -137,7 +137,7 @@ Always use a virtual environment in production:
 
 ```python
 import ct_toolkit
-print(ct_toolkit.__version__)  # e.g. 0.4.1
+print(ct_toolkit.__version__)  # e.g. 0.4.2
 ```
 
 Or run a quick sanity check:
