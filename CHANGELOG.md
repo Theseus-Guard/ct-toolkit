@@ -16,6 +16,7 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 - **setuptools** — Locked `setuptools` to `84.2.1`, fixing Dependabot #117 (Windows path escape via `namespace_packages.txt`).
 - **certifi** — Locked `certifi` to `2026.10.23`, fixing Dependabot #86 (compromised emSign intermediate CA keys).
 - **Dependency overrides** — `[tool.uv] override-dependencies` pins `pillow>=13.0.0` and `filelock>=4.2.1`, because the latest `fastembed` (0.9.0) caps `pillow<13.0` and the latest `litellm` (1.106.3) caps `filelock<4.0`. Remove the overrides once upstream releases relax these caps. Published package metadata is unchanged.
+- **Known limitation for PyPI users** — The overrides apply only to this repository's `uv.lock`. Installs of `ct-toolkit[ml]` (via `fastembed`) or `ct-toolkit[vision]` resolve Pillow from PyPI metadata, so they can still receive Pillow 12.x (affected by the Pillow Dependabot alerts) until `fastembed` relaxes its `pillow<13.0` cap. Users who need the fix now can pin `pillow>=13.0.0` in their own environment after confirming their `fastembed` setup works with it. Filelock 4.x is similarly constrained by `litellm` for PyPI installs.
 
 ### Validation
 
