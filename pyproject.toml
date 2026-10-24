@@ -84,6 +84,11 @@ dev = [
     "mypy>=1.10",
 ]
 
+[tool.uv]
+# Security: Pillow 13.0.0 (Dependabot #77-122) and filelock 4.2.1 (Dependabot #120-122).
+# fastembed (<=0.9.0) caps pillow<13.0 and litellm (<=1.106.3) caps filelock<4.0; override until upstream relaxes them.
+override-dependencies = ["pillow>=13.0.0", "filelock>=4.2.1"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
