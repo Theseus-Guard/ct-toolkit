@@ -59,3 +59,18 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+      - name: Update GitHub Release notes from CHANGELOG
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES=$(awk -v h="## [$VERSION]" 'index($0, h) == 1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md)
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            echo "No CHANGELOG section for $VERSION; keeping generated release notes"
+            exit 0
+          fi
+          EXISTING=$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body')
+          printf '%s\n\n%s\n' "$NOTES" "$EXISTING" > "$RUNNER_TEMP/release-notes.md"
+          gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
