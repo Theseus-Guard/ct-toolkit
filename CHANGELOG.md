@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [0.4.3] - 2026-11-02
+
+### Security
+
+- **Provenance log SQL injection** — Fixed `ProvenanceLog._load_all_entries` building the SQLite `LIMIT` clause by string interpolation. The limit is now bound as a query parameter (`LIMIT ?`) and coerced with `int()`. Flagged by CodeQL as `py/sql-injection` (high severity, alert #50). Affects `get_entries(limit=...)` on the SQLite backend.
+
+### Changed
+
+- **Capability cache untracked** — `config/llm_capability.yaml` is a runtime-generated startup cache and is now listed in `.gitignore` and removed from version control. The file is still created locally by the wrapper on startup.
+
+### Validation
+
+- **Automated Tests:** `426 passed, 3 skipped` (`uv run --locked --all-extras pytest tests`).
+
 ## [0.4.2] - 2026-10-24
 
 ### Security

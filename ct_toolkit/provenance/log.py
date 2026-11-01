@@ -666,11 +666,13 @@ class ProvenanceLog:
             query += " WHERE " + " AND ".join(conditions)
 
         query += " ORDER BY timestamp ASC"
+        params: tuple[int, ...] = ()
         if limit:
-            query += f" LIMIT {limit}"
-        
+            query += " LIMIT ?"
+            params = (int(limit),)
+
         assert self._conn is not None
-        rows = self._conn.execute(query).fetchall()
+        rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
     def _get_last_entry_hash(self) -> str:

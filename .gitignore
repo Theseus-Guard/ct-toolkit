@@ -55,3 +55,6 @@ docs/_build/
 # Local security review plans & caches
 plans/
 .agent_cache/
+
+# Runtime-generated capability cache (rewritten by tests and startup)
+config/llm_capability.yaml
