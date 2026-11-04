@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ct-toolkit"
-version = "0.4.3"
+version = "0.4.4"
 description = "Computational Theseus Toolkit — Identity Continuity Guardrails for Agentic Systems"
 readme = "README.md"
 requires-python = ">=3.11, <3.14"
@@ -22,7 +22,7 @@ dependencies = [
     "SQLAlchemy>=2.0.0",
     "httpx>=0.27.0",
     "jinja2>=3.1.0",
-    "pyasn1>=0.6.4", # Fix: BER/CER/DER DoS + REAL resource consumption + OID quadratic complexity (Dependabot #58, #59, #61)
+    "pyasn1>=0.6.5", # Fix: BER/CER/DER DoS + REAL resource consumption + OID quadratic complexity (Dependabot #58, #59, #61) + schemaless container decoding and constructed BIT STRING/string/ANY quadratic CPU/DoS (Dependabot #123-#126)
     "urllib3>=2.8.0",    # Fix: Decompression-bomb safeguards and sensitive header exposure (Dependabot #30, #31) + HTTPS proxy TLS config + unbounded chunk-size line + Chunked Deflate infinite loop GHSA-gh4c-6fx4-qh6g (Dependabot #69)
     "idna>=3.15",        # Fix: CVE-2024-3651 DoS via idna.encode()
 ]

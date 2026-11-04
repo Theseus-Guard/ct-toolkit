@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [0.4.4] - 2026-11-05
+
+### Security
+
+- **pyasn1** — Raised the minimum `pyasn1` to `0.6.5` (lock resolves `0.6.5`), fixing four high-severity Dependabot alerts: quadratic CPU use in schemaless BER/CER/DER container decoding (GHSA-fm9c-5rcf-2q5p, Dependabot #123), quadratic-time DoS in constructed string and indefinite-length ANY decoding (GHSA-9m75-vc3g-4x39, Dependabot #124), quadratic-complexity DoS in binary REAL decoding (GHSA-mm57-4v3p-rchx, Dependabot #125), and quadratic CPU consumption in constructed BIT STRING decoding (GHSA-2qm8-x737-gmw5, Dependabot #126).
+
+### Validation
+
+- **Automated Tests:** `426 passed, 3 skipped` (`uv run --locked --all-extras pytest tests`).
+- **Lock Check:** `uv lock --check` passes; the lock diff is limited to `ct-toolkit` and `pyasn1`.
+
 ## [0.4.3] - 2026-11-02
 
 ### Security
