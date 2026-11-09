@@ -4,7 +4,7 @@
 #
 #   CT_MODE=observe|enforce   tool-call guard mode (default observe)
 #   CT_VAULT=/path/vault.db   provenance vault (default: ./ct_provenance.db next to this script)
-#   CT_CMD="..."              how to run CT-Toolkit (default: ct-toolkit, else python -m ct_toolkit)
+#   CT_CMD="..."              how to run CT-Toolkit (default: ct-toolkit on PATH, else the repo's .venv, else python -m ct_toolkit)
 #   LITELLM_CMD="..."         how to run LiteLLM (default: litellm)
 #   CT_AWS_PROFILE=name       the AWS profile you signed in with (aws login --profile <name>); required
 set -euo pipefail
@@ -15,7 +15,9 @@ LOGS="$HERE/logs"
 mkdir -p "$LOGS"
 
 if [ -z "${CT_CMD:-}" ]; then
-  if command -v ct-toolkit >/dev/null 2>&1; then CT_CMD="ct-toolkit"; else CT_CMD="python3 -m ct_toolkit"; fi
+  if command -v ct-toolkit >/dev/null 2>&1; then CT_CMD="ct-toolkit"
+  elif [ -x "$HERE/../../.venv/bin/ct-toolkit" ]; then CT_CMD="$HERE/../../.venv/bin/ct-toolkit"
+  else CT_CMD="python3 -m ct_toolkit"; fi
 fi
 LITELLM_CMD="${LITELLM_CMD:-litellm}"
 
