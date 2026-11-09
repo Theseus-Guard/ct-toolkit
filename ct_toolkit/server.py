@@ -592,7 +592,8 @@ async def dashboard_tool_guard_get() -> JSONResponse:
         stored = guard_settings.load(path)
         error = None
     except ValueError as exc:
-        stored, error = None, str(exc)
+        logger.warning(f"Tool-call guard settings file could not be read: {exc}")
+        stored, error = None, "The settings file is invalid; see the server log for the details."
     return JSONResponse(content=_tool_guard_payload(path, stored, error), headers=_SECURITY_HEADERS)
 
 

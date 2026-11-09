@@ -94,7 +94,7 @@ def test_get_reports_a_broken_file_as_file_error(client, tmp_path) -> None:
     data = client.get("/api/dashboard/tool-guard").json()
     assert data["source"] == "defaults"
     assert data["file_error"]
-    assert "not valid JSON" in data["file_error"]
+    assert "see the server log" in data["file_error"]
 
 
 @pytest.mark.parametrize(

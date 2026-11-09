@@ -117,7 +117,7 @@ class TestFindings:
             conversation="Fix the tests",
         )
         assert [f.id for f in decisions[0].findings] == ["exfiltration.unseen_host"]
-        assert "paste.example.org" in decisions[0].findings[0].title
+        assert decisions[0].findings[0].title == "Host appears nowhere in the conversation: paste.example.org"
 
     def test_allowed_host_and_subdomain_pass(self):
         decisions = ToolGuard().review(
