@@ -8,24 +8,30 @@ hide:
 
 # Computational Theseus Toolkit
 
-**Identity Continuity & Hierarchical Guardrails for the Post-Drift AI Era.**
+**Know what your AI agents are doing, and keep them who you designed them to be.**
 
-CT Toolkit is an open-source security layer that prevents **Sequential Self-Compression (SSC)** in agentic systems — ensuring your AI agents remain who they were on day one, even after thousands of interactions.
+CT Toolkit sits between your code and your model, and watches two things:
+
+- **Identity drift.** Over thousands of calls, an agent can slowly move away from the rules it was deployed with. The toolkit, which guards against this *Sequential Self-Compression (SSC)*, measures that drift and reports it.
+- **Tool calls.** Before an agent runs a command or a tool, the toolkit checks it: a tool nobody declared, data sent to a host the task never mentioned, or a command that reads secrets. You decide whether it only records these, or blocks them.
+
+Every decision is signed and chained, so you can show later what happened and why.
 
 <div class="ct-install-tabs" markdown>
 
 === "pip"
 
     ```bash
+    # Core: the library, the ct-toolkit CLI, the web dashboard and the tool-call guard
     pip install ct-toolkit
-    # Or with CLI, Web Dashboard, Enterprise & Observability extras:
+    # Optional extras: PostgreSQL vaults, OpenTelemetry, framework middleware and more
     pip install "ct-toolkit[all]"
     ```
 
 === "uv (recommended)"
 
     ```bash
-    uv add "ct-toolkit[all]"
+    uv add ct-toolkit
     ```
 
 === "from source"
@@ -112,9 +118,15 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
     <p><a href="integrations/">Browse Integrations</a></p>
   </li>
   <li>
+    <p><strong>Tool-Call Guard</strong></p>
+    <hr />
+    <p>Reviews the tool calls an agent wants to run: undeclared tools, unexpected hosts and risky commands. Record only, or block, from the CLI, the proxy or the dashboard.</p>
+    <p><a href="concepts/tool-call-guard/">How the guard works</a></p>
+  </li>
+  <li>
     <p><strong>CLI & Interactive Web Dashboard</strong></p>
     <hr />
-    <p>Monitor provenance chains, divergence tiers, and sandbox cooldowns via Rich CLI or the localhost-bound Web Audit Dashboard.</p>
+    <p>Watch provenance, divergence tiers, tool-call decisions and sandbox cooldowns, and change the guard settings, from the terminal or the localhost-bound Web Audit Dashboard.</p>
     <p><a href="guides/cli-auditor/">Explore CLI & Web UI</a></p>
   </li>
 </ul>
@@ -129,13 +141,17 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
 
 ## Existing guardrails aren't enough
 
-|                               | Llama-Guard / Rule Engines | **CT Toolkit**                                |
-| ----------------------------- | -------------------------- | --------------------------------------------- |
-| **Stateful drift detection**  | ✗ Stateless per-prompt     | ✓ Tracks identity over thousands of calls     |
-| **Multi-agent hierarchies**   | ✗ No hierarchy awareness   | ✓ Propagates kernel constraints to sub-agents |
-| **Formal rule evolution**     | ✗ Binary block/allow       | ✓ Reflective Endorsement with signed approval |
-| **Cryptographic audit trail** | ✗ No provenance            | ✓ HMAC hash chain, regulator-ready            |
-| **Fine-tuning safety**        | ✗ No training constraints  | ✓ `DivergencePenaltyLoss` for PyTorch         |
+|                                        | Llama-Guard / rule engines | **CT Toolkit**                                                  |
+| -------------------------------------- | -------------------------- | --------------------------------------------------------------- |
+| **Checks what the agent does**         | ✗ Mostly classifies text   | ✓ Reviews tool calls before they run                            |
+| **Stateful drift detection**           | ✗ Stateless per prompt     | ✓ Tracks identity over thousands of calls                       |
+| **Multi-agent hierarchies**            | ✗ No hierarchy awareness   | ✓ Propagates kernel constraints to sub-agents                   |
+| **Observe first, enforce later**       | ✗ Binary block or allow    | ✓ Observe mode records; enforce mode removes risky calls        |
+| **No agent code changes**              | ✗ Needs integration        | ✓ Proxy for OpenAI and Anthropic APIs, or wrap your client      |
+| **Local judge option**                 | ✗ Hosted model             | ✓ Optional small local model, off by default                    |
+| **Formal rule evolution**              | ✗ Binary block or allow    | ✓ Reflective Endorsement with signed approval                   |
+| **Cryptographic audit trail**          | ✗ No provenance            | ✓ HMAC chain of every drift check and tool-call decision        |
+| **Fine-tuning safety**                 | ✗ No training constraints  | ✓ `DivergencePenaltyLoss` for PyTorch (`[ml]`)                  |
 
 [:octicons-arrow-right-24: Read the full rationale](concepts/why-ct-toolkit.md)
 

@@ -4,22 +4,26 @@
 :root {
   --md-primary-fg-color: #3f51b5; /* Indigo */
   --ct-gradient: linear-gradient(135deg, #3f51b5 0%, #2196f3 100%);
-  --ct-card-bg: var(--md-default-bg-color);
-  --ct-card-border: var(--md-default-fg-color--lightest);
+  --ct-card-bg: #f4f6fb; /* light theme: a tint, so cards stand out from the white page */
+  --ct-card-border: #d9dfeb;
 }
 
 /* Hero Section */
 .ct-hero {
-  padding: 4rem 0 3rem;
-  text-align: center;
+  padding: 0.5rem 0 3rem;
+  text-align: left;
   max-width: 900px;
-  margin: 0 auto;
+  margin: -0.5rem auto 0;
 }
 
+/* Only the title is centred; the rest of the hero reads left to right. One line on wide screens. */
 .ct-hero h1 {
-  font-size: 3.2rem;
+  text-align: center;
+  font-size: clamp(2rem, 3.4vw, 2.7rem);
+  white-space: nowrap;
   font-weight: 900;
   letter-spacing: -0.03em;
+  margin-top: 0;
   margin-bottom: 1.5rem;
   background: var(--ct-gradient);
   -webkit-background-clip: text;
@@ -231,5 +235,11 @@
 @media (max-width: 600px) {
   .ct-hero h1 {
     font-size: 2.2rem;
+    white-space: normal;
   }
+}
+
+/* Hero call-to-action buttons stay centred under the left-aligned text. */
+.ct-hero p:has(> .md-button) {
+  text-align: center;
 }
