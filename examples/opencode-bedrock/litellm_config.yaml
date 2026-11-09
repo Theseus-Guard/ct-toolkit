@@ -1,0 +1,11 @@
+# LiteLLM proxy: exposes AWS Bedrock as an OpenAI-compatible API on 127.0.0.1:4000.
+# Credentials come from the AWS profile below (run `aws login --profile <profile>` first).
+model_list:
+  - model_name: global.openai.gpt-6-luna            # the name OpenCode sends
+    litellm_params:
+      model: bedrock/global.openai.gpt-6-luna        # the Bedrock model id
+      aws_region_name: eu-central-1
+      aws_profile_name: theseus-guard
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY          # optional; leave unset for local-only use
