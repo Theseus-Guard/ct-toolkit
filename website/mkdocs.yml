@@ -149,6 +149,7 @@ nav:
       - CLI Auditor: guides/cli-auditor.md
       - Passive Compression Guard: guides/passive-compression.md
       - Advanced Setup: guides/enterprise.md
+      - Performance & Scaling: guides/performance.md
       - Fine-Tuning with CIK: guides/fine-tuning.md
       - EU AI Act Compliance: guides/compliance.md
 

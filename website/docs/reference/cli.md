@@ -26,6 +26,7 @@ ct-toolkit dashboard --web --vault ./ct_provenance.db --port 8001
 *   `--host`: Host to bind the web dashboard server to when `--web` is used (Default: `127.0.0.1`).
 *   `--port`: Port to bind the web dashboard server to when `--web` is used (Default: `8001`).
 *   `--api-key`: Optional `X-CT-API-Key` required to access the web dashboard API (Mandatory when binding to a non-loopback host such as `0.0.0.0`).
+*   `--full-verify-interval`: Seconds between full chain verifications when `--web` is used (Default: `300`, minimum `5`). Env: `CT_FULL_VERIFY_INTERVAL`. An edit to an old entry shows within this time; new entries are checked every 5 seconds. See [Performance](../guides/performance.md).
 
 ---
 
@@ -64,6 +65,7 @@ ct-toolkit serve --kernel <KERNEL> --port <PORT> [OPTIONS]
 *   `--host`: Host to bind the server to (Default: `127.0.0.1`). Non-loopback hosts require `--api-key` or `CT_SERVER_API_KEY`.
 *   `--port`: Port to bind the server to (Default: `8001`).
 *   `--api-key`: API key for authenticating requests via the `X-CT-API-Key` header (or set `CT_SERVER_API_KEY`).
+*   `--full-verify-interval`: Seconds between full chain verifications (Default: `300`, minimum `5`). Env: `CT_FULL_VERIFY_INTERVAL`. See [Performance](../guides/performance.md).
 *   `--kernel`: Name of the Constitutional Kernel to use (Default: `general`).
 *   `--template`: Name of the Identity Template to use (Default: `general`).
 *   `--vault`: Path to the provenance log database (Default: `./ct_provenance.db`).

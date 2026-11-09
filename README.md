@@ -85,10 +85,10 @@ In complex agentic workflows, LLMs tend to "drift" from their original instructi
 ## Quick Start
 
 ```bash
-# Core lightweight install
+# Core install: the library, the ct-toolkit CLI, the web dashboard and the tool-call guard
 pip install ct-toolkit
 
-# Or install with optional extras (cli, server, enterprise, embeddings, observability, all)
+# Optional extras: ml (torch, fastembed), postgres, observability, structured, vision, all
 pip install "ct-toolkit[all]"
 ```
 

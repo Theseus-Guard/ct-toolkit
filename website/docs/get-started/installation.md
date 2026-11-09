@@ -13,7 +13,7 @@
 pip install ct-toolkit
 ```
 
-This installs CT Toolkit's lightweight core dependencies. For CLI tools, the Web Audit Dashboard, PostgreSQL vaults, local ONNX embeddings, or OpenTelemetry, install the desired optional extras below or use `ct-toolkit[all]`:
+This installs the core, the `ct-toolkit` command, the Web Audit Dashboard, the tool-call guard and the tool-call proxy. For PostgreSQL vaults, local embeddings, the ML judge, or OpenTelemetry, install the optional extras below or use `ct-toolkit[all]`:
 
 ```bash
 pip install "ct-toolkit[all]"
@@ -176,7 +176,7 @@ CT Toolkit's lightweight core dependencies:
 | `jinja2`       | System prompt templating                                  |
 
 !!! note "Modular Optional Extras"
-    CT Toolkit's core does **not** require PyTorch, FastAPI, or SQLAlchemy unless you opt into `[ml]`, `[server]`, or `[enterprise]`.
+    The core does **not** require PyTorch. It is needed only for `[ml]`, which provides the divergence penalty loss and fastembed-based embeddings. The CLI, the web layer (FastAPI, Uvicorn) and the tool-call guard are part of the core install.
 
 ---
 

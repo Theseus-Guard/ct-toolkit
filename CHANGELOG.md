@@ -20,7 +20,16 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 - **`tool-guard` CLI** — `check` reviews a saved response and exits 1 on a high-severity finding (CI gate); `list`, `stats` and `show` read the decisions from a provenance vault.
 - **Web dashboard** — A "Tool calls" section with stat tiles, a chart and a filterable, sortable, paged table, backed by `GET /api/dashboard/tool-calls`.
 - **Trajectory scrubbing** — `ct-toolkit scrub` redacts credentials, emails, home directory names (including `C:\Users\<name>`), public IPv4 addresses and secret-looking environment values from JSON, JSON lines and text trajectories. Dry run unless `--out` is given.
-- **Provenance** — Tool-call decisions are written as metadata events with `event="tool_call"`. `ProvenanceLog.entries_with_event(event)` returns the active entries of one event type.
+- **Provenance** — Tool-call decisions are written as metadata events with `event="tool_call"`, and listed with `ProvenanceLog.tool_call_page()`.
+- **CLI** — `ct-toolkit serve` and `ct-toolkit dashboard --web` take `--full-verify-interval` (env `CT_FULL_VERIFY_INTERVAL`, default 300 seconds).
+
+### Changed
+
+- **Install** — `typer`, `rich`, `fastapi`, `starlette` and `uvicorn` are part of the default install, so `pip install ct-toolkit` provides the `ct-toolkit` command, the web dashboard and the tool-call proxy. The `server` and `cli` extras are kept empty for compatibility. `torch` stays in the `ml` extra; the divergence loss imports it only when used.
+- **Provenance storage** — Tool-call and divergence queries run against indexed columns (`event`, `verdict`, `tool`, `mode`, `event_type`) that are filled in when an entry is written. Tool-call counts come from pre-computed counters. Existing vaults are upgraded automatically the first time they are opened.
+- **Dashboard** — Integrity is checked by a background thread: new entries every 5 seconds, a full pass every `--full-verify-interval` seconds. Dashboard reads are cached per vault write generation, with a 30-second age limit. Divergence figures are unchanged, but are computed over the newest entries only, as before.
+- **Dashboard** — The recent ledger shows the newest divergence entries (it showed the oldest before), and the score chart runs oldest to newest.
+- **Writes** — Writing an entry no longer scans the whole chain. 20,000 entries are written in 14 s on SQLite, against 133 s before.
 
 ### Security
 

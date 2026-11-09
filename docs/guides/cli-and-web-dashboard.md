@@ -13,7 +13,7 @@ Install the CLI and Server extras:
 ```bash
 pip install "ct-toolkit[cli,server]"
 # Or install all optional features (including PostgreSQL & OpenTelemetry):
-pip install "ct-toolkit[all]"
+pip install ct-toolkit
 ```
 
 ---
@@ -55,6 +55,7 @@ Then open **`http://127.0.0.1:8001/dashboard`** in your browser.
 - **KPI Telemetry Cards**: Live cryptographic chain verification badge, active entry counter, average/max divergence score with visual meter, and staged cooldown counter.
 - **Visual Tier Breakdown**: Stacked bar chart and proportional breakdown of `OK`, `L1_WARNING`, `L2_JUDGE`, and `L3_ICM` events.
 - **Interactive Log Explorer**: Filter provenance entries by divergence tier (`All`, `OK`, `L1`, `L2`, `L3`) and click any row to inspect the full request/response SHA-256 hashes, previous entry hash, and JSON metadata.
+- **Integrity**: Chain verification runs in a background thread, not on each request. Entries added since the last check are verified every 5 seconds; the whole chain is verified every `--full-verify-interval` seconds (default `300`, env `CT_FULL_VERIFY_INTERVAL`). An edit to an old entry therefore appears within that interval. Dashboard responses are cached per write, for at most 30 seconds. See [Performance & Scaling](../../website/docs/guides/performance.md) for the measured costs.
 - **Tool calls section**: Stat tiles and a chart of the tool-call guard verdicts (`passed`, `flagged`, `blocked`), and a table of the decisions with filters, sorting and pagination. It is backed by `GET /api/dashboard/tool-calls` (parameters `page`, `page_size`, `sort`, `order`, `verdict`, `tool` and `q`). Arguments are not in the audit trail, so the table cannot show them.
 
 ---
