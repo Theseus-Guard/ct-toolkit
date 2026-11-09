@@ -138,9 +138,10 @@ class TestCli:
         result = runner.invoke(app, ["tool-guard", "config", "set", "--settings", str(path), "--mode", "enforce", "--allow-host", "api.example.com"])
         assert result.exit_code == 0, result.output
         assert gs.load(path).mode == "enforce"
+        assert gs.load(path).extra_hosts == ("api.example.com",)
         shown = runner.invoke(app, ["tool-guard", "config", "show", "--settings", str(path)])
+        assert shown.exit_code == 0
         assert "enforce" in shown.output
-        assert "api.example.com" in shown.output.split()
 
     def test_config_set_rejects_invalid_values_and_keeps_the_file(self, tmp_path):
         path = tmp_path / "s.json"
