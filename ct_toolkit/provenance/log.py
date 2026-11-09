@@ -312,6 +312,15 @@ class ProvenanceLog:
             "last_content_hash": expected_prev,
         }
 
+    def entries_with_event(self, event: str) -> list[ProvenanceEntry]:
+        """Active entries whose metadata `event` equals `event`, oldest first.
+
+        Loads the whole active chain and filters in Python: fine for local vaults, not for very large
+        Postgres ones (a metadata index would be the fix there)."""
+        with self._lock:
+            entries = self._load_all_entries(include_rolled_back=False)
+        return [entry for entry in entries if (entry.metadata or {}).get("event") == event]
+
     def get_entries(self, limit: int = 100, include_rolled_back: bool = False) -> list[ProvenanceEntry]:
         """Returns up to `limit` entries ordered chronologically."""
         with self._lock:
