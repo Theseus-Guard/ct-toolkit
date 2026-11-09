@@ -211,6 +211,27 @@ ct-toolkit tool-guard show 3f2a9c1e --vault ./ct_provenance.db
 *   `ENTRY_ID`: Record id, or a unique prefix of it (Required).
 *   `--vault`: Provenance vault to read (Default: `./ct_provenance.db`).
 
+#### `tool-guard config`
+Shows or changes the tool-call guard settings file. The proxy, the guardrail server and the dashboard read the same file, and the dashboard's **Tool-Call Guard Settings** panel edits it too.
+
+The file is `./tool_guard_settings.json` unless `--settings` or `CT_TOOL_GUARD_SETTINGS` names another one. Explicit command-line flags (for example `--tool-guard-mode` on `serve` or `proxy`) override the file for that process.
+
+```bash
+ct-toolkit tool-guard config show
+ct-toolkit tool-guard config set --mode enforce --allow-host api.example.com
+ct-toolkit tool-guard config set --judge-model openai/gemma-4-E4B-it --judge-api-base http://localhost:8090/v1
+ct-toolkit tool-guard config set --clear-judge
+```
+
+**Options (`set`):**
+*   `--mode`: `observe` or `enforce`.
+*   `--allow-host`: Extra allowed host. Repeatable; replaces the list.
+*   `--judge-model`, `--judge-api-base`: Judge model and its OpenAI-compatible base URL.
+*   `--clear-judge`: Turn the judge off.
+*   `--fail-closed` / `--fail-open`: Block or let through suspicious calls when the judge gives no answer.
+
+Changes made while `proxy` or `serve` runs take effect on the next request. The API key of a judge is never stored in the file; it comes from the environment.
+
 ---
 
 ### `setup`
