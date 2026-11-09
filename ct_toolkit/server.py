@@ -20,6 +20,7 @@ import uvicorn
 from ct_toolkit.core.wrapper import TheseusWrapper
 from ct_toolkit.provenance.log import ProvenanceLog
 from ct_toolkit.provenance.log import DIVERGENCE_TIERS, resolve_tier
+from ct_toolkit.provenance.ledger import ledger_page, row_from_entry, staged_page, staged_rules
 from ct_toolkit.provenance.tool_calls import query_page
 from ct_toolkit.utils.cache import GenerationCache
 from ct_toolkit.core import tool_guard_settings as guard_settings
@@ -364,11 +365,8 @@ def _is_staged_record(meta: Dict[str, Any]) -> bool:
     )
 
 
-def _telemetry_figures(log: ProvenanceLog, limit: int, active_kernel: str, active_template: str) -> Dict[str, Any]:
-    """Divergence figures, the ledger and the chart series, read from a bounded window of the newest entries."""
-    window_all = log.recent_entries(None, limit=limit)
-    scores = [e.divergence_score for e in window_all if e.divergence_score is not None]
-
+def _staged_source(log: ProvenanceLog) -> Dict[str, Any]:
+    """The staged-rule records (oldest first) and the endorsement ids that were promoted."""
     promoted_ids: set[str] = set()
     staged_records: List[Dict[str, Any]] = []
     for entry in reversed(log.recent_staged_entries()):
@@ -378,7 +376,16 @@ def _telemetry_figures(log: ProvenanceLog, limit: int, active_kernel: str, activ
                 promoted_ids.add(str(meta["endorsement_id"]))
         elif _is_staged_record(meta):
             staged_records.append(meta)
+    return {"staged_records": staged_records, "promoted_ids": promoted_ids}
 
+
+def _telemetry_figures(log: ProvenanceLog, limit: int, active_kernel: str, active_template: str) -> Dict[str, Any]:
+    """Divergence figures and the chart series, read from a bounded window of the newest divergence entries. The
+    ledger is the newest entries of every kind."""
+    window_all = log.recent_entries(None, limit=limit)
+    scores = [e.divergence_score for e in window_all if e.divergence_score is not None]
+
+    staged = _staged_source(log)
     window = [e for e in window_all if not _is_staged_record(e.metadata or {})]
     tier_counts: Dict[str, int] = {tier: 0 for tier in DIVERGENCE_TIERS}
     for entry in window:
@@ -388,23 +395,11 @@ def _telemetry_figures(log: ProvenanceLog, limit: int, active_kernel: str, activ
         if recorded in DIVERGENCE_TIERS or entry.divergence_score is not None:
             tier_counts[resolve_tier(meta, entry.divergence_score)] += 1
 
-    ledger: List[Dict[str, Any]] = []
-    for entry in window[:25]:
-        meta = entry.metadata or {}
-        ledger.append(
-            {
-                "id": entry.id,
-                "timestamp": entry.timestamp,
-                "divergence_score": entry.divergence_score,
-                "tier": resolve_tier(meta, entry.divergence_score),
-                "kernel": str(meta.get("kernel", active_kernel)),
-                "template": str(meta.get("template", active_template)),
-                "model": str(meta.get("model", "unknown")),
-                "prev_entry_hash": entry.prev_entry_hash,
-                "content_hash": entry.content_hash(),
-                "hmac_signature": entry.hmac_signature,
-            }
-        )
+    ledger = [
+        row_from_entry(e).to_dict()
+        for e in log.recent_activity(limit=max(limit, 25))
+        if not _is_staged_record(e.metadata or {})
+    ][:10]
     # The score chart is drawn oldest to newest.
     score_series: List[Dict[str, Any]] = [
         {
@@ -425,8 +420,8 @@ def _telemetry_figures(log: ProvenanceLog, limit: int, active_kernel: str, activ
         "tier_counts": tier_counts,
         "score_series": score_series,
         "recent_entries": ledger,
-        "promoted_ids": promoted_ids,
-        "staged_records": staged_records,
+        "promoted_ids": staged["promoted_ids"],
+        "staged_records": staged["staged_records"],
     }
 
 
@@ -457,30 +452,7 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
     )
 
     now = time.time()
-    staged_rules_out: List[Dict[str, Any]] = []
-    for s_meta in figures["staged_records"]:
-        eid = str(s_meta.get("endorsement_id", "unknown"))
-        commitment = str(s_meta.get("commitment_id", "unknown"))
-        rule_text = str(s_meta.get("rule_text", ""))
-        cooldown_until = s_meta.get("cooldown_until")
-        if eid in figures["promoted_ids"]:
-            status_code = "PROMOTED"
-            remaining_seconds = 0
-        elif isinstance(cooldown_until, (int, float)) and now < cooldown_until:
-            status_code = "ACTIVE_COOLDOWN"
-            remaining_seconds = int(cooldown_until - now)
-        else:
-            status_code = "READY_FOR_PROMOTION"
-            remaining_seconds = 0
-        staged_rules_out.append(
-            {
-                "endorsement_id": eid,
-                "commitment_id": commitment,
-                "rule_text": rule_text,
-                "status": status_code,
-                "remaining_seconds": remaining_seconds,
-            }
-        )
+    staged_rules_out = staged_rules(figures["staged_records"], figures["promoted_ids"], now)
 
     return {
         "vault_path": _sanitize_vault_display(str(vault_path)),
@@ -516,7 +488,7 @@ async def dashboard_status_api(limit: int = Query(200, ge=1, le=2000)) -> JSONRe
 @app.get("/api/dashboard/tool-calls", dependencies=[Depends(_verify_api_key)])
 def dashboard_tool_calls_api(
     page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=200),
+    page_size: int = Query(10, ge=1, le=200),
     sort: str = Query("time", description="One of: time, tool, verdict, mode."),
     order: str = Query("desc", description="asc or desc."),
     verdict: Optional[str] = Query(None, description="passed, flagged or blocked."),
@@ -545,6 +517,54 @@ def dashboard_tool_calls_api(
     except Exception as exc:
         logger.error(f"Dashboard tool-calls API error: {exc}")
         raise HTTPException(status_code=500, detail="Failed to read provenance tool calls.")
+    return JSONResponse(content=result.to_dict(), headers=_SECURITY_HEADERS)
+
+
+@app.get("/api/dashboard/ledger", dependencies=[Depends(_verify_api_key)])
+def dashboard_ledger_api(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=200),
+    sort: str = Query("time", description="One of: time, kind, score."),
+    order: str = Query("desc", description="asc or desc."),
+    kind: Optional[str] = Query(None, description="divergence, tool_call, model_turn or api_call."),
+    q: Optional[str] = Query(None, max_length=256, description="Free text over the entry's metadata."),
+) -> JSONResponse:
+    """Paged, sorted and filtered entries of the provenance ledger, of every kind."""
+    try:
+        log = _dashboard_log()
+        result = _read_cache.get_or_compute(
+            ("ledger", id(log), kind, q, sort, order, page, page_size),
+            _generation(log),
+            lambda: ledger_page(log, kind=kind, search=q, sort=sort, order=order, page=page, page_size=page_size),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Dashboard ledger API error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to read the provenance ledger.")
+    return JSONResponse(content=result.to_dict(), headers=_SECURITY_HEADERS)
+
+
+@app.get("/api/dashboard/staged-rules", dependencies=[Depends(_verify_api_key)])
+def dashboard_staged_rules_api(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=200),
+    sort: str = Query("status", description="One of: status, rule, commitment, remaining."),
+    order: str = Query("asc", description="asc or desc."),
+    status: Optional[str] = Query(None, description="PROMOTED, ACTIVE_COOLDOWN or READY_FOR_PROMOTION."),
+    q: Optional[str] = Query(None, max_length=256, description="Substring of the rule text or the commitment id."),
+) -> JSONResponse:
+    """Paged, sorted and filtered staged kernel rules. The status is computed at request time, so it is not cached."""
+    try:
+        log = _dashboard_log()
+        source = _read_cache.get_or_compute(("staged-source", id(log)), _generation(log), lambda: _staged_source(log))
+        rules = staged_rules(source["staged_records"], source["promoted_ids"], time.time())
+        result = staged_page(rules, status=status, search=q, sort=sort, order=order, page=page, page_size=page_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Dashboard staged-rules API error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to read staged rules.")
     return JSONResponse(content=result.to_dict(), headers=_SECURITY_HEADERS)
 
 
@@ -675,7 +695,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       line-height: 1.5;
     }
     .container {
-      max-width: 1360px;
+      max-width: 1920px;
       margin: 0 auto;
       padding: 24px 28px 48px;
     }
@@ -1107,50 +1127,100 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="section-stack">
-      <div class="card">
+      <div class="card" id="staged-card">
         <div class="section-header">
           <div class="section-title">Staged Kernel Rules (Sandbox Cooldown)</div>
           <div class="section-meta">Reflective Endorsement Queue</div>
+        </div>
+        <div class="tc-controls">
+          <select id="sr-status" class="api-input" aria-label="Filter by sandbox status">
+            <option value="">All statuses</option>
+            <option value="READY_FOR_PROMOTION">ready for promotion</option>
+            <option value="ACTIVE_COOLDOWN">active cooldown</option>
+            <option value="PROMOTED">promoted</option>
+          </select>
+          <input type="search" id="sr-search" class="api-input" placeholder="Search rule text or commitment..." aria-label="Search staged rules" maxlength="256" style="width: 260px;" />
+          <select id="sr-page-size" class="api-input" aria-label="Rows per page">
+            <option value="10" selected>10 / page</option>
+            <option value="25">25 / page</option>
+            <option value="50">50 / page</option>
+            <option value="100">100 / page</option>
+          </select>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Endorsement ID</th>
-                <th>Commitment ID</th>
-                <th>Staged Rule Text</th>
-                <th>Sandbox Status</th>
+                <th class="sortable" data-sort="commitment">Commitment ID<span class="sort-ind"></span></th>
+                <th class="sortable" data-sort="rule">Staged Rule Text<span class="sort-ind"></span></th>
+                <th class="sortable" data-sort="status">Sandbox Status<span class="sort-ind"></span></th>
+                <th class="sortable" data-sort="remaining">Cooldown Left<span class="sort-ind"></span></th>
               </tr>
             </thead>
             <tbody id="staged-rules-tbody">
-              <tr><td colspan="4" class="empty-state">Loading staged rules...</td></tr>
+              <tr><td colspan="5" class="empty-state">Loading staged rules...</td></tr>
             </tbody>
           </table>
         </div>
+        <div class="tc-pager">
+          <div id="sr-count">0 matching</div>
+          <div class="controls">
+            <button class="pill-btn" id="sr-prev" type="button">&#x2039; Prev</button>
+            <span class="section-meta" id="sr-page-label">page 1 of 1</span>
+            <button class="pill-btn" id="sr-next" type="button">Next &#x203A;</button>
+          </div>
+        </div>
       </div>
 
-      <div class="card">
+      <div class="card" id="ledger-card">
         <div class="section-header">
-          <div class="section-title">Immutable Provenance Chain Ledger (Recent Entries)</div>
+          <div class="section-title">Immutable Provenance Chain Ledger</div>
           <div class="section-meta" id="ledger-meta">HMAC-SHA256 Verified</div>
+        </div>
+        <div class="tc-controls">
+          <select id="lg-kind" class="api-input" aria-label="Filter by kind of entry">
+            <option value="">All entries</option>
+            <option value="divergence">Divergence</option>
+            <option value="tool_call">Tool call</option>
+            <option value="model_turn">Model turn</option>
+            <option value="api_call">API call</option>
+          </select>
+          <input type="search" id="lg-search" class="api-input" placeholder="Search endpoint, model, tool..." aria-label="Search the ledger" maxlength="256" style="width: 240px;" />
+          <select id="lg-page-size" class="api-input" aria-label="Rows per page">
+            <option value="10" selected>10 / page</option>
+            <option value="25">25 / page</option>
+            <option value="50">50 / page</option>
+            <option value="100">100 / page</option>
+          </select>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Entry ID</th>
-                <th>Timestamp</th>
-                <th>Kernel / Model</th>
-                <th>Divergence</th>
+                <th class="sortable" data-sort="time">Timestamp<span class="sort-ind"></span></th>
+                <th class="sortable" data-sort="kind">Kind<span class="sort-ind"></span></th>
+                <th>Detail</th>
+                <th>Endpoint</th>
+                <th>Model</th>
+                <th class="sortable" data-sort="score">Divergence<span class="sort-ind"></span></th>
                 <th>Tier</th>
                 <th>Prev Hash &#x2192; Content Hash</th>
                 <th>HMAC Signature</th>
               </tr>
             </thead>
             <tbody id="ledger-tbody">
-              <tr><td colspan="7" class="empty-state">Loading provenance ledger...</td></tr>
+              <tr><td colspan="9" class="empty-state">Loading provenance ledger...</td></tr>
             </tbody>
           </table>
+        </div>
+        <div class="tc-pager">
+          <div id="lg-count">0 matching</div>
+          <div class="controls">
+            <button class="pill-btn" id="lg-prev" type="button">&#x2039; Prev</button>
+            <span class="section-meta" id="lg-page-label">page 1 of 1</span>
+            <button class="pill-btn" id="lg-next" type="button">Next &#x203A;</button>
+          </div>
         </div>
       </div>
 
@@ -1188,8 +1258,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <input type="text" id="tc-tool" class="api-input" placeholder="Tool name contains..." aria-label="Filter by tool" maxlength="256" style="width: 180px;" />
           <input type="search" id="tc-search" class="api-input" placeholder="Search findings, judge, model..." aria-label="Search tool calls" maxlength="256" style="width: 240px;" />
           <select id="tc-page-size" class="api-input" aria-label="Rows per page">
-            <option value="10">10 / page</option>
-            <option value="25" selected>25 / page</option>
+            <option value="10" selected>10 / page</option>
+            <option value="25">25 / page</option>
             <option value="50">50 / page</option>
             <option value="100">100 / page</option>
           </select>
@@ -1344,7 +1414,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       const padL = 42, padR = 16, padT = 16, padB = 28;
       const plotW = Math.max(w - padL - padR, 100);
       const plotH = h - padT - padB;
-      const maxVal = Math.max(0.65, ...series.map(d => d.score));
+      // Divergence scores are bounded to [0, 1]; a fixed scale keeps the thresholds and the samples comparable over time.
+      const maxVal = 1;
 
       const xFor = (i) => series.length === 1 ? padL + plotW / 2 : padL + (i / (series.length - 1)) * plotW;
       const yFor = (v) => padT + plotH - Math.min(Math.max(v / maxVal, 0), 1) * plotH;
@@ -1388,6 +1459,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </defs>
           <line x1="${padL}" y1="${padT + plotH}" x2="${w - padR}" y2="${padT + plotH}" stroke="#1f2937" stroke-width="1" />
           <text x="${padL - 6}" y="${padT + plotH + 3}" text-anchor="end" fill="#6b7280" font-size="10" font-family="monospace">0.00</text>
+          <text x="${padL - 6}" y="${padT + 3}" text-anchor="end" fill="#6b7280" font-size="10" font-family="monospace">1.00</text>
           ${threshSvg}
           <polygon points="${areaPts}" fill="url(#scoreGrad)" />
           <polyline fill="none" stroke="#06b6d4" stroke-width="2.2" points="${pts}" />
@@ -1424,50 +1496,66 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }).join('');
     }
 
-    function renderStagedRules(rules) {
-      const tbody = document.getElementById('staged-rules-tbody');
+    const ledgerState = { page: 1, pageSize: 10, sort: 'time', order: 'desc', kind: '', q: '' };
+    const stagedState = { page: 1, pageSize: 10, sort: 'status', order: 'asc', status: '', q: '' };
+    const ledgerQueryTimers = {};
+    let ledgerRequestSeq = 0;
+    let stagedRequestSeq = 0;
+    const LEDGER_KIND_LABELS = { divergence: 'DIVERGENCE', tool_call: 'TOOL CALL', model_turn: 'MODEL TURN', api_call: 'API CALL' };
+
+    function renderStagedKpi(rules) {
       document.getElementById('kpi-staged-count').textContent = String((rules || []).length);
-      if (!rules || rules.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" class="empty-state">No staged rules recorded in provenance log.</td></tr>`;
+    }
+
+    function stagedBadge(r) {
+      if (r.status === 'PROMOTED') return `<span class="badge status-promoted">PROMOTED</span>`;
+      if (r.status === 'ACTIVE_COOLDOWN') return `<span class="badge status-cooldown">ACTIVE COOLDOWN</span>`;
+      return `<span class="badge status-ready">READY FOR PROMOTION</span>`;
+    }
+
+    function renderStagedRows(data) {
+      const tbody = document.getElementById('staged-rules-tbody');
+      if (!data.items.length) {
+        const empty = data.total === 0 && !stagedState.status && !stagedState.q;
+        const message = empty ? 'No staged rules recorded in provenance log.' : 'No staged rules match these filters.';
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${escapeHtml(message)}</td></tr>`;
         return;
       }
-      tbody.innerHTML = rules.map(r => {
-        let badge = `<span class="badge status-ready">READY FOR PROMOTION</span>`;
-        if (r.status === 'PROMOTED') {
-          badge = `<span class="badge status-promoted">PROMOTED</span>`;
-        } else if (r.status === 'ACTIVE_COOLDOWN') {
-          badge = `<span class="badge status-cooldown">ACTIVE COOLDOWN (${r.remaining_seconds}s left)</span>`;
-        }
-        return `
+      tbody.innerHTML = data.items.map(r => `
           <tr>
             <td class="mono">${escapeHtml(String(r.endorsement_id).slice(0, 12))}</td>
             <td class="mono">${escapeHtml(r.commitment_id)}</td>
-            <td>${escapeHtml(r.rule_text)}</td>
-            <td>${badge}</td>
+            <td class="text-cell">${escapeHtml(r.rule_text)}</td>
+            <td>${stagedBadge(r)}</td>
+            <td class="mono">${r.status === 'ACTIVE_COOLDOWN' ? escapeHtml(`${r.remaining_seconds}s`) : '—'}</td>
           </tr>
-        `;
-      }).join('');
+        `).join('');
     }
 
-    function renderLedger(entries) {
+    function renderLedgerRows(items) {
       const tbody = document.getElementById('ledger-tbody');
-      if (!entries || entries.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Provenance ledger is currently empty.</td></tr>`;
+      if (!items.length) {
+        const message = ledgerState.kind || ledgerState.q ? 'No ledger entries match these filters.' : 'Provenance ledger is currently empty.';
+        tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${escapeHtml(message)}</td></tr>`;
         return;
       }
-      tbody.innerHTML = entries.map(e => {
+      tbody.innerHTML = items.map(e => {
         const dt = new Date(e.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
         const scoreStr = e.divergence_score !== null && e.divergence_score !== undefined
           ? Number(e.divergence_score).toFixed(4)
           : '—';
-        const tierClass = `tier-${e.tier || 'ok'}`;
+        const tierCell = e.tier
+          ? `<span class="badge tier-${escapeHtml(e.tier)}">${escapeHtml(String(e.tier).toUpperCase())}</span>`
+          : '—';
         return `
           <tr>
-            <td class="mono">${escapeHtml(String(e.id).slice(0, 10))}…</td>
             <td class="mono">${escapeHtml(dt)}</td>
-            <td class="mono">${escapeHtml(e.kernel)} / ${escapeHtml(e.model)}</td>
+            <td><span class="badge">${escapeHtml(LEDGER_KIND_LABELS[e.kind] || e.kind)}</span></td>
+            <td class="text-cell">${escapeHtml(e.detail || '—')}</td>
+            <td class="mono">${escapeHtml(e.endpoint || '—')}</td>
+            <td class="mono">${escapeHtml(e.model || '—')}</td>
             <td class="mono">${escapeHtml(scoreStr)}</td>
-            <td><span class="badge ${escapeHtml(tierClass)}">${escapeHtml(String(e.tier || 'ok').toUpperCase())}</span></td>
+            <td>${tierCell}</td>
             <td>
               <span class="hash-pill">${escapeHtml(String(e.prev_entry_hash).slice(0, 10))}…</span>
               &#x2192;
@@ -1477,6 +1565,87 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </tr>
         `;
       }).join('');
+    }
+
+    function setSortIndicators(cardId, state) {
+      document.querySelectorAll(`#${cardId} th.sortable`).forEach(th => {
+        const active = th.dataset.sort === state.sort;
+        th.querySelector('.sort-ind').textContent = active ? (state.order === 'asc' ? '▲' : '▼') : '';
+      });
+    }
+
+    function setPager(prefix, data) {
+      document.getElementById(`${prefix}-count`).textContent = `${data.total} matching`;
+      document.getElementById(`${prefix}-page-label`).textContent = `page ${data.page} of ${data.pages}`;
+      document.getElementById(`${prefix}-prev`).disabled = data.page <= 1;
+      document.getElementById(`${prefix}-next`).disabled = data.page >= data.pages;
+    }
+
+    async function fetchPaged(path, params) {
+      const res = await fetch(`${path}?${params.toString()}`, { headers: dashboardHeaders() });
+      if (res.status === 401) return { error: 'Authentication required (401): enter your Server API Key in the top-right box.' };
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail = typeof err.detail === 'string' ? err.detail : res.statusText;
+        return { error: `Request failed (${res.status}): ${detail}` };
+      }
+      return { data: await res.json() };
+    }
+
+    async function fetchLedger() {
+      const seq = ++ledgerRequestSeq;
+      const params = new URLSearchParams({
+        page: String(ledgerState.page),
+        page_size: String(ledgerState.pageSize),
+        sort: ledgerState.sort,
+        order: ledgerState.order,
+      });
+      if (ledgerState.kind) params.set('kind', ledgerState.kind);
+      if (ledgerState.q) params.set('q', ledgerState.q);
+      try {
+        const result = await fetchPaged('/api/dashboard/ledger', params);
+        if (seq !== ledgerRequestSeq) return;
+        if (result.error) {
+          document.getElementById('ledger-tbody').innerHTML = `<tr><td colspan="9" class="empty-state">${escapeHtml(result.error)}</td></tr>`;
+          return;
+        }
+        ledgerState.page = result.data.page;
+        renderLedgerRows(result.data.items);
+        setPager('lg', result.data);
+        setSortIndicators('ledger-card', ledgerState);
+      } catch (err) {
+        if (seq === ledgerRequestSeq) {
+          document.getElementById('ledger-tbody').innerHTML = `<tr><td colspan="9" class="empty-state">${escapeHtml(`Failed to load the ledger: ${err.message}`)}</td></tr>`;
+        }
+      }
+    }
+
+    async function fetchStagedRules() {
+      const seq = ++stagedRequestSeq;
+      const params = new URLSearchParams({
+        page: String(stagedState.page),
+        page_size: String(stagedState.pageSize),
+        sort: stagedState.sort,
+        order: stagedState.order,
+      });
+      if (stagedState.status) params.set('status', stagedState.status);
+      if (stagedState.q) params.set('q', stagedState.q);
+      try {
+        const result = await fetchPaged('/api/dashboard/staged-rules', params);
+        if (seq !== stagedRequestSeq) return;
+        if (result.error) {
+          document.getElementById('staged-rules-tbody').innerHTML = `<tr><td colspan="5" class="empty-state">${escapeHtml(result.error)}</td></tr>`;
+          return;
+        }
+        stagedState.page = result.data.page;
+        renderStagedRows(result.data);
+        setPager('sr', result.data);
+        setSortIndicators('staged-card', stagedState);
+      } catch (err) {
+        if (seq === stagedRequestSeq) {
+          document.getElementById('staged-rules-tbody').innerHTML = `<tr><td colspan="5" class="empty-state">${escapeHtml(`Failed to load staged rules: ${err.message}`)}</td></tr>`;
+        }
+      }
     }
 
     function dashboardHeaders() {
@@ -1519,8 +1688,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
         renderChart(data.score_series || []);
         renderTiers(data.tier_counts || {});
-        renderStagedRules(data.staged_rules || []);
-        renderLedger(data.recent_entries || []);
+        renderStagedKpi(data.staged_rules || []);
       } catch (err) {
         showBanner(`Failed to connect to CT Toolkit Server: ${err.message}`);
       }
@@ -1528,7 +1696,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     // Tool-call table state. It survives the 5 s auto-refresh: refreshDashboard() re-requests with the same query.
     const TOOL_CALL_COLORS = { passed: '#10b981', flagged: '#f59e0b', blocked: '#ef4444' };
-    const toolCallState = { page: 1, pageSize: 25, sort: 'time', order: 'desc', verdict: '', tool: '', q: '' };
+    const toolCallState = { page: 1, pageSize: 10, sort: 'time', order: 'desc', verdict: '', tool: '', q: '' };
     const toolQueryTimers = {};
     let toolCallRequestSeq = 0;
 
@@ -1598,7 +1766,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('tc-prev').disabled = data.page <= 1;
       document.getElementById('tc-next').disabled = data.page >= data.pages;
 
-      document.querySelectorAll('th.sortable').forEach(th => {
+      document.querySelectorAll('#tool-calls-card th.sortable').forEach(th => {
         const active = th.dataset.sort === toolCallState.sort;
         th.querySelector('.sort-ind').textContent = active ? (toolCallState.order === 'asc' ? '▲' : '▼') : '';
       });
@@ -1643,6 +1811,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     function refreshDashboard() {
       fetchTelemetry();
+      fetchLedger();
+      fetchStagedRules();
       fetchToolCalls();
       // Poll refreshes only the read-only summary; the form is filled on first load.
       fetchToolGuard(!toolGuardState.loaded);
@@ -1677,7 +1847,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       toolCallState.page += 1;
       fetchToolCalls();
     });
-    document.querySelectorAll('th.sortable').forEach(th => {
+    document.querySelectorAll('#tool-calls-card th.sortable').forEach(th => {
       th.addEventListener('click', () => {
         const key = th.dataset.sort;
         if (toolCallState.sort === key) {
@@ -1688,6 +1858,88 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         }
         toolCallState.page = 1;
         fetchToolCalls();
+      });
+    });
+
+    function setLedgerQuery(key, value) {
+      clearTimeout(ledgerQueryTimers[key]);
+      ledgerQueryTimers[key] = setTimeout(() => {
+        ledgerState[key] = value.trim();
+        ledgerState.page = 1;
+        fetchLedger();
+      }, 250);
+    }
+    document.getElementById('lg-kind').addEventListener('change', (e) => {
+      ledgerState.kind = e.target.value;
+      ledgerState.page = 1;
+      fetchLedger();
+    });
+    document.getElementById('lg-search').addEventListener('input', (e) => setLedgerQuery('q', e.target.value));
+    document.getElementById('lg-page-size').addEventListener('change', (e) => {
+      ledgerState.pageSize = Number(e.target.value);
+      ledgerState.page = 1;
+      fetchLedger();
+    });
+    document.getElementById('lg-prev').addEventListener('click', () => {
+      ledgerState.page = Math.max(1, ledgerState.page - 1);
+      fetchLedger();
+    });
+    document.getElementById('lg-next').addEventListener('click', () => {
+      ledgerState.page += 1;
+      fetchLedger();
+    });
+    document.querySelectorAll('#ledger-card th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (ledgerState.sort === key) {
+          ledgerState.order = ledgerState.order === 'asc' ? 'desc' : 'asc';
+        } else {
+          ledgerState.sort = key;
+          ledgerState.order = key === 'time' ? 'desc' : 'asc';
+        }
+        ledgerState.page = 1;
+        fetchLedger();
+      });
+    });
+
+    function setStagedQuery(value) {
+      clearTimeout(ledgerQueryTimers.staged);
+      ledgerQueryTimers.staged = setTimeout(() => {
+        stagedState.q = value.trim();
+        stagedState.page = 1;
+        fetchStagedRules();
+      }, 250);
+    }
+    document.getElementById('sr-status').addEventListener('change', (e) => {
+      stagedState.status = e.target.value;
+      stagedState.page = 1;
+      fetchStagedRules();
+    });
+    document.getElementById('sr-search').addEventListener('input', (e) => setStagedQuery(e.target.value));
+    document.getElementById('sr-page-size').addEventListener('change', (e) => {
+      stagedState.pageSize = Number(e.target.value);
+      stagedState.page = 1;
+      fetchStagedRules();
+    });
+    document.getElementById('sr-prev').addEventListener('click', () => {
+      stagedState.page = Math.max(1, stagedState.page - 1);
+      fetchStagedRules();
+    });
+    document.getElementById('sr-next').addEventListener('click', () => {
+      stagedState.page += 1;
+      fetchStagedRules();
+    });
+    document.querySelectorAll('#staged-card th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (stagedState.sort === key) {
+          stagedState.order = stagedState.order === 'asc' ? 'desc' : 'asc';
+        } else {
+          stagedState.sort = key;
+          stagedState.order = 'asc';
+        }
+        stagedState.page = 1;
+        fetchStagedRules();
       });
     });
 
@@ -1720,7 +1972,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function splitToolGuardHosts(value) {
-      return value.split(/[\n,]/).map(h => h.trim()).filter(h => h.length > 0);
+      return value.split(/[\\n,]/).map(h => h.trim()).filter(h => h.length > 0);
     }
 
     function updateToolGuardControls() {
@@ -1748,7 +2000,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       const s = data.settings;
       document.getElementById(s.mode === 'enforce' ? 'tg-mode-enforce' : 'tg-mode-observe').checked = true;
       document.getElementById('tg-ack').checked = false;
-      document.getElementById('tg-hosts').value = (s.extra_hosts || []).join('\n');
+      document.getElementById('tg-hosts').value = (s.extra_hosts || []).join('\\n');
       document.getElementById('tg-judge-model').value = s.judge_model || '';
       document.getElementById('tg-judge-base').value = s.judge_api_base || '';
       document.getElementById('tg-fail-closed').checked = Boolean(s.judge_fail_closed);

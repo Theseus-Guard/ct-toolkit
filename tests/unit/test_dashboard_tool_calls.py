@@ -83,7 +83,7 @@ def test_default_listing_has_only_tool_calls(seeded) -> None:
     data = resp.json()
     assert data["total"] == 5
     assert data["page"] == 1
-    assert data["page_size"] == 25
+    assert data["page_size"] == 10
     assert data["pages"] == 1
     assert len(data["items"]) == 5
     assert all(item["verdict"] in ("passed", "flagged", "blocked") for item in data["items"])
@@ -205,12 +205,14 @@ def test_divergence_telemetry_ignores_tool_calls(seeded) -> None:
     assert data["tier_counts"]["l2_judge"] == 1
     assert [point["score"] for point in data["score_series"]] == [0.06, 0.34]
     assert data["max_score"] == 0.34
-    assert len(data["recent_entries"]) == 2
+    # The ledger lists every kind of entry; the tiers and the chart still count divergence samples only.
+    assert sorted(entry["kind"] for entry in data["recent_entries"]) == ["divergence", "divergence"] + ["tool_call"] * 5
+    assert all(entry["tier"] is None for entry in data["recent_entries"] if entry["kind"] == "tool_call")
     # The chain itself still covers every entry, tool calls included.
     assert data["verified_count"] == 7
 
 
-def test_ledger_shows_newest_divergence_entries(dashboard) -> None:
+def test_ledger_shows_newest_entries_of_every_kind(dashboard) -> None:
     client, prov = dashboard
     scores = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06]
     for index, score in enumerate(scores):
@@ -220,9 +222,11 @@ def test_ledger_shows_newest_divergence_entries(dashboard) -> None:
 
     data = client.get("/api/dashboard/status", params={"limit": 3}).json()
     assert data["entries_analyzed"] == 3
-    # Oldest -> newest for the chart, newest first for the ledger.
+    # Oldest -> newest for the chart, newest first for the ledger, which is not cut down by the divergence window.
     assert [point["score"] for point in data["score_series"]] == [0.04, 0.05, 0.06]
-    assert [entry["divergence_score"] for entry in data["recent_entries"]] == [0.06, 0.05, 0.04]
+    assert len(data["recent_entries"]) == 9
+    assert data["recent_entries"][0]["kind"] == "divergence"
+    assert [e["divergence_score"] for e in data["recent_entries"] if e["kind"] == "divergence"] == scores[::-1]
 
 
 def test_dashboard_html_has_tool_calls_section(dashboard) -> None:

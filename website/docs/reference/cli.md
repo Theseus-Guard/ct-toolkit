@@ -114,7 +114,7 @@ The proxy covers OpenAI Chat Completions, OpenAI Responses API and Anthropic Mes
 
 **Usage:**
 ```bash
-ct-toolkit proxy --upstream https://api.openai.com/v1 --port 8788 --tool-guard-mode enforce
+ct-toolkit proxy --upstream https://api.openai.com --port 8788 --tool-guard-mode enforce
 
 # Then set the harness's base URL to http://127.0.0.1:8788 (the request path is appended to --upstream)
 ```
@@ -186,7 +186,7 @@ ct-toolkit tool-guard list --vault ./ct_provenance.db --verdict blocked --sort t
 *   `--sort`: `time` (default), `tool`, `verdict` or `mode`.
 *   `--order`: `desc` (default) or `asc`.
 *   `--page`: Page to show (Default: `1`).
-*   `--page-size`: Rows per page, 1 to 200 (Default: `25`).
+*   `--page-size`: Rows per page, 1 to 200 (Default: `10`).
 
 Rows carry the tool name, verdict, mode, findings, judge answer and model. They do not carry the call's arguments: the vault stores only hashes of the call text.
 

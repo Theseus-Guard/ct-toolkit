@@ -112,7 +112,7 @@ def query_page(
     sort: str = "time",
     order: str = "desc",
     page: int = 1,
-    page_size: int = 25,
+    page_size: int = 10,
 ) -> ToolCallPage:
     """One page of tool-call decisions. Raises ValueError for an unknown sort, order or verdict."""
     check_query(sort, order, verdict)

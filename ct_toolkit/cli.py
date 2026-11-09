@@ -380,7 +380,7 @@ def tool_guard_list(
     sort: str = typer.Option("time", "--sort", help=f"Sort by: {', '.join(SORT_KEYS)}."),
     order: str = typer.Option("desc", "--order", help="asc or desc."),
     page: int = typer.Option(1, "--page", min=1, help="Page to show."),
-    page_size: int = typer.Option(25, "--page-size", min=1, max=200, help="Rows per page."),
+    page_size: int = typer.Option(10, "--page-size", min=1, max=200, help="Rows per page."),
 ):
     """Lists the tool-call decisions in a provenance vault, filtered, sorted and paged."""
     log = _open_vault(vault)
@@ -588,7 +588,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 @app.command()
 def proxy(
-    upstream: str = typer.Option(..., "--upstream", help="Model API base URL, e.g. https://api.openai.com/v1."),
+    upstream: str = typer.Option(..., "--upstream", help="Model API host, without the /v1 path: the request path is appended, e.g. https://api.openai.com."),
     host: str = typer.Option("127.0.0.1", "--host", help="Loopback only: the proxy has no authentication."),
     port: int = typer.Option(8788, "--port", help="Port to listen on."),
     mode: Optional[str] = typer.Option(None, "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes high-severity tool calls before the harness sees them. Overrides the settings file."),

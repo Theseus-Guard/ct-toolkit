@@ -45,6 +45,10 @@ _SQLALCHEMY_URL_PREFIXES = (
 
 
 TOOL_CALL_EVENT = "tool_call"
+# A model response without tool calls, recorded by the proxy. Like tool calls, it has no divergence score.
+MODEL_TURN_EVENT = "model_turn"
+# A request to the model API that is not a model turn (a model listing, a token count), recorded by the proxy.
+API_CALL_EVENT = "api_call"
 # Columns copied out of metadata at write time, so queries can filter and sort without parsing JSON.
 DERIVED_COLUMNS = ("event", "verdict", "tool", "mode", "event_type")
 STAGED_EVENT_TYPES = ("staged_promotion", "reflective_endorsement")
@@ -64,6 +68,12 @@ TOOL_CALL_SORT = {
     "tool": "LOWER(tool)",
     "verdict": "CASE verdict WHEN 'passed' THEN 0 WHEN 'flagged' THEN 1 WHEN 'blocked' THEN 2 ELSE 3 END",
     "mode": "mode",
+}
+# Sort keys of the ledger: the columns of the chain that the ledger shows, in the database.
+LEDGER_SORT = {
+    "time": "timestamp",
+    "kind": "COALESCE(event, 'divergence')",
+    "score": "divergence_score",
 }
 FULL_VERIFY_INTERVAL_S = 300.0
 GENERATION_COUNTER = "meta:generation"  # bumped by every write and rollback: a cache key for readers
@@ -472,6 +482,11 @@ class ProvenanceLog:
                 return self._select("status = 'active' AND event IS NULL", {}, "timestamp DESC, id DESC", limit)
             return self._select("status = 'active' AND event = :event", {"event": event}, "timestamp DESC, id DESC", limit)
 
+    def recent_activity(self, limit: int = 25) -> list[ProvenanceEntry]:
+        """Newest active entries of every kind: divergence entries, tool-call decisions, model turns and API calls."""
+        with self._lock:
+            return self._select("status = 'active'", {}, "timestamp DESC, id DESC", limit)
+
     def recent_staged_entries(self, limit: int = 500) -> list[ProvenanceEntry]:
         """Newest staged-rule entries (promotions and staged endorsements), newest first."""
         with self._lock:
@@ -507,7 +522,7 @@ class ProvenanceLog:
         sort: str = "time",
         order: str = "desc",
         page: int = 1,
-        page_size: int = 25,
+        page_size: int = 10,
     ) -> tuple[list[ProvenanceEntry], int, int, int]:
         """(entries, total, page, pages) of tool-call entries, filtered, sorted and paged in the database.
         The caller validates the sort, order, verdict and page size."""
@@ -544,6 +559,40 @@ class ProvenanceLog:
             page = min(requested, pages)
             if page != requested and total > 0:
                 entries = self._select(clause, params, order_by, page_size, (page - 1) * page_size)
+        return entries, total, page, pages
+
+    def activity_page(
+        self,
+        *,
+        kind: Optional[str] = None,
+        search: Optional[str] = None,
+        sort: str = "time",
+        order: str = "desc",
+        page: int = 1,
+        page_size: int = 10,
+    ) -> tuple[list[ProvenanceEntry], int, int, int]:
+        """(entries, total, page, pages) of active entries, of one kind or all, filtered, sorted and paged in the
+        database. `kind` is "divergence" for entries without an event. The caller validates sort, order and kind."""
+        if sort not in LEDGER_SORT:
+            raise ValueError(f"unknown sort key {sort!r}")
+        where = ["status = 'active'"]
+        params: dict[str, Any] = {}
+        if kind == "divergence":
+            where.append("event IS NULL")
+        elif kind is not None:
+            where.append("event = :event")
+            params["event"] = kind
+        if search:
+            where.append("LOWER(metadata) LIKE :q ESCAPE '!'")
+            params["q"] = f"%{_escape_like(search)}%"
+        clause = " AND ".join(where)
+        direction = "ASC" if order == "asc" else "DESC"
+        order_by = f"{LEDGER_SORT[sort]} {direction}, timestamp {direction}, id {direction}"
+        with self._lock, self._transaction() as run:
+            total = int(run(f"SELECT COUNT(*) FROM provenance WHERE {clause}", params)[0][0])
+        pages = max(1, -(-total // page_size))
+        page = min(max(1, page), pages)
+        entries = self._select(clause, params, order_by, page_size, (page - 1) * page_size) if total else []
         return entries, total, page, pages
 
     def find_tool_calls(self, id_prefix: str, limit: int = 2) -> list[ProvenanceEntry]:
