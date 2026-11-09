@@ -41,6 +41,11 @@ guardrails:
 
 ---
 
+!!! warning "Tool calls: whole-response blocking only"
+    The Generic Guardrail API can only block the **whole** response. When a response contains a risky tool call, `serve` returns `BLOCKED` for the entire response, and LiteLLM cannot edit the tool calls it contains. The guardrail still records each tool-call decision in the provenance log when `log_requests` is on (the default).
+
+    To remove single tool calls before the harness runs them, put the [tool-call proxy](../reference/cli.md#proxy) (`ct-toolkit proxy --tool-guard-mode enforce`) or the library's `tool_guard_mode="enforce"` between the harness and the model instead. See [Tool-Call Guard](../concepts/tool-call-guard.md).
+
 ## 3. How it Works
 
 When LiteLLM receives a request, it will call CT Toolkit at two stages:

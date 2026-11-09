@@ -70,6 +70,11 @@ ct-toolkit serve --kernel <KERNEL> --port <PORT> [OPTIONS]
 *   `--policy-environment`: Policy environment override (`dev`, `test`, `prod`) (Default: `prod`).
 *   `--judge-provider`: LLM provider for L2/L3 judge calls (Default: `openai`).
 *   `--judge-model`: Specific model ID for L2/L3 judge calls.
+*   `--tool-guard-mode`: `observe` (default) only records tool-call findings; `enforce` blocks a response that contains a high-severity tool call. Env: `CT_TOOL_GUARD_MODE`. See [Tool-Call Guard](../concepts/tool-call-guard.md).
+*   `--tool-guard-allow-host`: Extra host that tool-call arguments may reach without the conversation naming it. Repeatable.
+*   `--tool-guard-judge-model`: LiteLLM model that reviews suspicious tool calls (Default: off). Recommended: `openai/gemma-4-E4B-it`. Env: `CT_TOOL_GUARD_JUDGE_MODEL`.
+*   `--tool-guard-judge-api-base`: API base of the judge's OpenAI-compatible server, e.g. `http://localhost:11434/v1`.
+*   `--tool-guard-judge-fail-closed`: Block suspicious calls when the judge gives no usable answer (Default: let them through).
 
 **Example Request (Pre-call):**
 ```json
@@ -94,6 +99,115 @@ ct-toolkit serve --kernel <KERNEL> --port <PORT> [OPTIONS]
   "action": "NONE"
 }
 ```
+
+---
+
+### `proxy`
+Runs a local reverse proxy between an agent harness and its model API. Point the harness's base URL at the proxy and nothing else changes. Every model response's tool calls are reviewed by the [Tool-Call Guard](../concepts/tool-call-guard.md), and each verdict is written to the vault.
+
+The proxy covers OpenAI Chat Completions, OpenAI Responses API and Anthropic Messages request bodies, streamed or not. Other requests are passed through untouched.
+
+> [!WARNING]
+> The proxy has no authentication. It binds to loopback only (`127.0.0.1`, `localhost` or `::1`) and refuses any other `--host`.
+
+**Usage:**
+```bash
+ct-toolkit proxy --upstream https://api.openai.com/v1 --port 8788 --tool-guard-mode enforce
+
+# Then set the harness's base URL to http://127.0.0.1:8788 (the request path is appended to --upstream)
+```
+
+**Options:**
+*   `--upstream`: Model API base URL, e.g. `https://api.openai.com/v1` (Required).
+*   `--host`: Loopback address to listen on (Default: `127.0.0.1`).
+*   `--port`: Port to listen on (Default: `8788`).
+*   `--tool-guard-mode`: `observe` (default) records findings; `enforce` removes calls with a high-severity finding from the response before the harness sees them. Env: `CT_TOOL_GUARD_MODE`.
+*   `--vault`: Provenance log that receives the verdicts (Default: `./ct_provenance.db`).
+*   `--tool-guard-allow-host`: Extra host tool calls may reach without the conversation naming it. Repeatable.
+*   `--tool-guard-judge-model`: LiteLLM model that reviews suspicious calls (Default: off). Recommended: `openai/gemma-4-E4B-it`. Env: `CT_TOOL_GUARD_JUDGE_MODEL`.
+*   `--tool-guard-judge-api-base`: API base of the judge's OpenAI-compatible server, e.g. `http://localhost:11434/v1`.
+*   `--tool-guard-judge-fail-closed`: Block suspicious calls when the judge gives no usable answer (Default: let them through).
+
+---
+
+### `scrub`
+Redacts credentials, email addresses, home directory names (including `C:\Users\<name>`), public IPv4 addresses and secret-looking environment values from agent trajectories (JSON, JSON lines or plain text). A dry run unless `--out` is given. Redaction is best-effort: read the report before publishing a trajectory.
+
+**Usage:**
+```bash
+# Dry run: report only
+ct-toolkit scrub ./trajectories --show
+
+# Write scrubbed copies
+ct-toolkit scrub ./trajectories --out ./trajectories_clean --redact my-internal-name
+```
+
+**Options:**
+*   `PATH...`: Trajectory files or directories (Required).
+*   `--out`: Write scrubbed copies here, keeping the relative paths. Without it, nothing is written.
+*   `--redact`: Literal value to mask everywhere. Repeatable.
+*   `--no-env`: Don't mask the values of secret-looking environment variables (names containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD` or `CREDENTIAL`, with values of 8 or more characters).
+*   `--show`: List each hit with its masked preview.
+
+---
+
+### `tool-guard`
+Inspects the tool calls of a model response and the decisions recorded in a provenance vault. No model is needed, except for the optional judge.
+
+#### `tool-guard check`
+Reviews the tool calls in a saved response. Exits with code `1` if any call has a high-severity finding, in either mode, so it can gate a CI job.
+
+```bash
+ct-toolkit tool-guard check response.json --mode enforce
+```
+
+The input file is JSON with a `response` key (the model's raw response) and optional `tools`, `message`, `history` and `system` keys, which give the declared tools and the conversation.
+
+**Options:**
+*   `FILE`: JSON file to review (Required).
+*   `--mode`: `observe` (default) or `enforce`. Env: `CT_TOOL_GUARD_MODE`. The exit code does not depend on it.
+*   `--judge-model`: LiteLLM model that reviews suspicious calls (Default: off). Recommended: `openai/gemma-4-E4B-it`.
+*   `--judge-api-base`: API base of the judge's OpenAI-compatible server, e.g. `http://localhost:11434/v1`.
+
+#### `tool-guard list`
+Lists the tool-call decisions in a vault, filtered, sorted and paged.
+
+```bash
+ct-toolkit tool-guard list --vault ./ct_provenance.db --verdict blocked --sort time --order desc
+```
+
+**Options:**
+*   `--vault`: Provenance vault to read (Default: `./ct_provenance.db`).
+*   `--verdict`: Only `passed`, `flagged` or `blocked`.
+*   `--tool`: Tool name contains this text.
+*   `--search`: Matches the tool, findings, judge or model.
+*   `--sort`: `time` (default), `tool`, `verdict` or `mode`.
+*   `--order`: `desc` (default) or `asc`.
+*   `--page`: Page to show (Default: `1`).
+*   `--page-size`: Rows per page, 1 to 200 (Default: `25`).
+
+Rows carry the tool name, verdict, mode, findings, judge answer and model. They do not carry the call's arguments: the vault stores only hashes of the call text.
+
+#### `tool-guard stats`
+Counts the decisions in a vault by verdict and by tool.
+
+```bash
+ct-toolkit tool-guard stats --vault ./ct_provenance.db
+```
+
+**Options:**
+*   `--vault`: Provenance vault to read (Default: `./ct_provenance.db`).
+
+#### `tool-guard show`
+Shows one decision. The id can be a unique prefix of the id listed by `tool-guard list`.
+
+```bash
+ct-toolkit tool-guard show 3f2a9c1e --vault ./ct_provenance.db
+```
+
+**Options:**
+*   `ENTRY_ID`: Record id, or a unique prefix of it (Required).
+*   `--vault`: Provenance vault to read (Default: `./ct_provenance.db`).
 
 ---
 

@@ -65,6 +65,16 @@ Complete API reference for CT Toolkit.
     <p><a href="async-wrapper/">AsyncTheseusWrapper</a></p>
   </li>
   <li>
+    <p><strong>Tool-Call Guard</strong></p>
+    <p>Reviews the tool calls a model asks for: observe and enforce modes, the optional judge, and the audit trail.</p>
+    <p><a href="../concepts/tool-call-guard/">Tool-Call Guard</a></p>
+  </li>
+  <li>
+    <p><strong>CLI Reference</strong></p>
+    <p>The <code>ct-toolkit</code> commands: status, audit, serve, proxy, tool-guard, scrub and kernel tools.</p>
+    <p><a href="cli/">CLI Reference</a></p>
+  </li>
+  <li>
     <p><strong>Exceptions</strong></p>
     <p>Full exception hierarchy with usage examples.</p>
     <p><a href="exceptions/">Exceptions</a></p>

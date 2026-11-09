@@ -74,6 +74,7 @@ In complex agentic workflows, LLMs tend to "drift" from their original instructi
 - **Passive Context Compression Detection**: Automatically detects silent provider-side history compression (e.g., OpenAI/Anthropic).
 - **Constitutional Kernels & Distributed Propagation**: Axiomatic identity anchors with HMAC-SHA256 signed HTTP header propagation (`propagate_headers` / `from_headers`).
 - **Standalone Auditor & Status CLI**: Rapidly audit any LLM endpoint (`ct-toolkit audit`) and inspect provenance integrity & divergence tiers (`ct-toolkit status` / `dashboard`).
+- **Tool-Call Guard**: Reviews the tool calls an agent asks for before the harness runs them: undeclared tools, hosts the conversation never mentions, and risky commands or credential reads. Runs without a second model; `observe` records findings, `enforce` removes high-severity calls. Available as a library wrapper, a local proxy (`ct-toolkit proxy`) and the guardrail server.
 - **Autonomous Self-Correction**: Active L2->L1 feedback loop that retries and corrects divergent responses before they reach the user.
 - **Enterprise Provenance & Observability**: Immutable HMAC-signed hash chain supporting SQLite and PostgreSQL/SQLAlchemy with paginated verification and OpenTelemetry (OTel) spans/metrics.
 
@@ -120,6 +121,19 @@ ct-toolkit dashboard --web --vault ./ct_provenance.db --port 8001
 
 # Audit a local Ollama model
 ct-toolkit audit --url http://localhost:11434/v1 --kernel defense
+
+# Review the tool calls in a saved model response (exit code 1 on a high-severity finding)
+ct-toolkit tool-guard check ./response.json --mode enforce
+
+# Run a local tool-call proxy that removes risky calls; point the harness's base URL at http://127.0.0.1:8788
+ct-toolkit proxy --upstream https://api.openai.com/v1 --port 8788 --tool-guard-mode enforce
+
+# List, count and inspect tool-call decisions in the provenance vault
+ct-toolkit tool-guard list --vault ./ct_provenance.db --verdict blocked
+ct-toolkit tool-guard stats --vault ./ct_provenance.db
+
+# Redact credentials, emails, home directories and public IPs from a trajectory (dry run without --out)
+ct-toolkit scrub ./trajectories --out ./trajectories_clean
 
 # List available kernels and templates
 ct-toolkit list-kernels

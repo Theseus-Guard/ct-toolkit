@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(Note: This project uses `python-semantic-release` for automated versioning and changelog generation. Future automated releases will append updates here.)_
 
+## [Unreleased]
+
+### Added
+
+- **Tool-Call Guard** — Reviews the tool calls a model response asks the harness to run, with no second model: a call to a tool the request never declared (`policy.undeclared_tool`), a host in the arguments that the conversation never mentions and that is not on the allowlist (`exfiltration.unseen_host`), and risky-action patterns (`harness.proc_environ`, `harness.k8s_service_account`, `harness.namespace_escape`, `harness.env_dump`, `network.proxy_bypass`, `secrets.credential_file`, `secrets.windows_credential_store`). Matching also runs on a form with quotes and backslashes removed and `$IFS` read as a space.
+- **Modes** — `observe` (default) only records findings. `enforce` removes calls with a high-severity finding from the response; in streams, text is forwarded live and the held tool-call events are dropped when the stream ends. Set with `--tool-guard-mode` or `CT_TOOL_GUARD_MODE`.
+- **Optional judge** — A judge model reviews only suspicious calls and can only add blocks. Recommended model: `gemma-4-E4B-it`, used as `openai/gemma-4-E4B-it` with an OpenAI-compatible base URL. Off by default; fail-open unless `tool_guard_judge_fail_closed` is set.
+- **Library** — `WrapperConfig` fields `tool_guard`, `tool_guard_mode`, `tool_guard_allowed_hosts`, `tool_guard_judge_model`, `tool_guard_judge_api_base` and `tool_guard_judge_fail_closed`; `CTResponse.tool_decisions` and the final `CTStreamChunk.tool_decisions`.
+- **Tool-call proxy** — `ct-toolkit proxy` is a loopback-only reverse proxy for OpenAI Chat Completions, OpenAI Responses API and Anthropic Messages requests, streamed or not.
+- **Guardrail server** — `ct-toolkit serve` gained `--tool-guard-mode`, `--tool-guard-allow-host` and `--tool-guard-judge-model`, and reviews tool calls in the response phase. The LiteLLM Generic Guardrail API can only block the whole response.
+- **`tool-guard` CLI** — `check` reviews a saved response and exits 1 on a high-severity finding (CI gate); `list`, `stats` and `show` read the decisions from a provenance vault.
+- **Web dashboard** — A "Tool calls" section with stat tiles, a chart and a filterable, sortable, paged table, backed by `GET /api/dashboard/tool-calls`.
+- **Trajectory scrubbing** — `ct-toolkit scrub` redacts credentials, emails, home directory names (including `C:\Users\<name>`), public IPv4 addresses and secret-looking environment values from JSON, JSON lines and text trajectories. Dry run unless `--out` is given.
+- **Provenance** — Tool-call decisions are written as metadata events with `event="tool_call"`. `ProvenanceLog.entries_with_event(event)` returns the active entries of one event type.
+
+### Security
+
+- Enforce mode keeps blocked tool calls from the harness: the response, or the stream, is sent without them.
+- Tool-call audit entries store hashes of the call text only; the call's arguments are not written to the provenance chain.
+- The `/proc`, `unshare` and `nsenter` patterns are Linux-only. Windows credential and environment forms are matched on strings; the tests run on Linux and do not exercise Windows shell behaviour.
+
 ## [0.4.4] - 2026-11-05
 
 ### Security

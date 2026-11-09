@@ -131,6 +131,7 @@ nav:
       - Divergence Engine: concepts/divergence.md
       - Tiered Guardrails (L1/L2/L3): concepts/tiered-guardrails.md
       - Multi-Agent Hierarchy: concepts/multi-agent.md
+      - Tool-Call Guard: concepts/tool-call-guard.md
       - Provenance & Compliance: concepts/provenance.md
       - Reflective Endorsement: concepts/reflective-endorsement.md
 

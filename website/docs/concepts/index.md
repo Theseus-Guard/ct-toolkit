@@ -44,6 +44,14 @@ Understanding CT Toolkit's architecture helps you use it effectively. Start here
 
     [:octicons-arrow-right-24: Multi-agent](multi-agent.md)
 
+-   :material-shield-check:{ .lg .middle } **Tool-Call Guard**
+
+    ---
+
+    Reviews the tool calls a model asks the harness to run: undeclared tools, unseen hosts and risky actions, with observe and enforce modes.
+
+    [:octicons-arrow-right-24: Tool-call guard](tool-call-guard.md)
+
 -   :material-link-lock:{ .lg .middle } **Provenance & Compliance**
 
     ---

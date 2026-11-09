@@ -172,6 +172,37 @@ config = WrapperConfig(
 )
 ```
 
+### Tool-call guard
+
+Reviews the tool calls of each model response before they reach the harness. See [Tool-Call Guard](../concepts/tool-call-guard.md) for the checks and modes.
+
+| Parameter                       | Type                  | Default                  | Description                                                                                                  |
+| :------------------------------ | :-------------------- | :----------------------- | :----------------------------------------------------------------------------------------------------------- |
+| `tool_guard`                    | `bool`                | `True`                   | Review tool calls at all. When `False`, no decisions are made and `tool_decisions` is empty.                |
+| `tool_guard_mode`               | `str`                 | `"observe"`              | `"observe"` only records findings. `"enforce"` removes calls with a HIGH finding from the response.         |
+| `tool_guard_allowed_hosts`      | `tuple[str, ...]`     | `DEFAULT_ALLOWED_HOSTS`  | Hosts that tool-call arguments may reach without the conversation naming them. This replaces the default list, so include the defaults you still need. |
+| `tool_guard_judge_model`        | `str \| None`         | `None`                   | LiteLLM model that reviews suspicious calls (findings below HIGH). `None` leaves them to the scanner alone.   |
+| `tool_guard_judge_api_base`     | `str \| None`         | `None`                   | API base of the judge's OpenAI-compatible server, e.g. `"http://localhost:11434/v1"`.                          |
+| `tool_guard_judge_fail_closed`  | `bool`               | `False`                  | When the judge gives no usable verdict, block the suspicious call instead of letting it through.             |
+
+The recommended judge is `gemma-4-E4B-it` (`RECOMMENDED_JUDGE_MODEL`), passed as `openai/gemma-4-E4B-it` with the server's base URL. The name must match what the server serves.
+
+```python
+from ct_toolkit import TheseusWrapper, WrapperConfig
+from ct_toolkit.core.tool_guard import DEFAULT_ALLOWED_HOSTS
+
+config = WrapperConfig(
+    tool_guard_mode="enforce",
+    tool_guard_allowed_hosts=(*DEFAULT_ALLOWED_HOSTS, "api.internal.example"),
+    tool_guard_judge_model="openai/gemma-4-E4B-it",
+    tool_guard_judge_api_base="http://localhost:11434/v1",
+)
+wrapper = TheseusWrapper(provider="openai", config=config)
+```
+
+!!! note "Audit trail"
+    Each decision is written to the provenance log as a `tool_call` event when `log_requests` is `True`. Arguments are not stored, only hashes of the call text.
+
 ---
 
 ## Rigorous Analysis Mode
