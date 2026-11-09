@@ -6,6 +6,7 @@ Main entry point for the Theseus Guard / CT Toolkit CLI.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 import json
 import re
 import ssl
@@ -33,6 +34,7 @@ from ct_toolkit.core.tool_guard import (
 )
 from ct_toolkit.divergence.l3_icm import ICMRunner
 from ct_toolkit.provenance.log import ProvenanceLog
+from ct_toolkit.provenance.tool_calls import SORT_KEYS, TOOL_CALL_EVENT, VERDICTS, query_rows, rows_from_entries, summarize
 from ct_toolkit.utils.trajectory_scrub import Scrubber
 from ct_toolkit.server import start_dashboard_server, start_server
 
@@ -207,6 +209,8 @@ def audit(
     if not report.is_healthy:
         raise typer.Exit(code=1)
 
+FAIL_CLOSED_HELP = "Block suspicious calls when the judge gives no usable answer (default: let them through)."
+
 def _parse_tool_guard_mode(value: str, param_hint: str) -> ToolGuardMode:
     try:
         return ToolGuardMode(value.lower())
@@ -223,6 +227,7 @@ def tool_guard_check(
     judge_model: Optional[str] = typer.Option(
         None, "--judge-model", help=f"LiteLLM model that reviews suspicious calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL}."
     ),
+    judge_api_base: Optional[str] = typer.Option(None, "--judge-api-base", help="API base of the judge's OpenAI-compatible server."),
 ):
     """Reviews the tool calls in a saved response. Exits 1 if any call has a high-severity finding."""
     guard_mode = _parse_tool_guard_mode(mode, "--mode")
@@ -232,7 +237,7 @@ def tool_guard_check(
         console.print(f"[bold red]Not valid JSON:[/bold red] {e}")
         raise typer.Exit(code=1)
 
-    judge = ToolCallJudge(judge_model) if judge_model else None
+    judge = ToolCallJudge(judge_model, api_base=judge_api_base) if judge_model else None
     decisions = ToolGuard(guard_mode, judge=judge).review(
         data.get("response") or {},
         tools=data.get("tools"),
@@ -262,6 +267,105 @@ def tool_guard_check(
     if any(decision.severe for decision in decisions):
         raise typer.Exit(code=1)
 
+def _tool_call_rows(vault: Path):
+    if not vault.is_file():
+        console.print(f"[bold red]No vault at[/bold red] {vault}")
+        raise typer.Exit(code=1)
+    return rows_from_entries(ProvenanceLog(vault_path=str(vault)).entries_with_event(TOOL_CALL_EVENT))
+
+_VERDICT_COLORS = {"passed": "green", "flagged": "yellow", "blocked": "red"}
+
+@tool_guard_app.command("list")
+def tool_guard_list(
+    vault: Path = typer.Option("./ct_provenance.db", "--vault", help="Provenance vault to read."),
+    verdict: Optional[str] = typer.Option(None, "--verdict", help="Only this verdict: passed, flagged or blocked."),
+    tool: Optional[str] = typer.Option(None, "--tool", help="Tool name contains this text."),
+    search: Optional[str] = typer.Option(None, "--search", help="Matches the tool, findings, judge or model."),
+    sort: str = typer.Option("time", "--sort", help=f"Sort by: {', '.join(SORT_KEYS)}."),
+    order: str = typer.Option("desc", "--order", help="asc or desc."),
+    page: int = typer.Option(1, "--page", min=1, help="Page to show."),
+    page_size: int = typer.Option(25, "--page-size", min=1, max=200, help="Rows per page."),
+):
+    """Lists the tool-call decisions in a provenance vault, filtered, sorted and paged."""
+    rows = _tool_call_rows(vault)
+    try:
+        result = query_rows(rows, verdict=verdict, tool=tool, search=search, sort=sort, order=order, page=page, page_size=page_size)
+    except ValueError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=2)
+
+    table = Table(title="Tool-call decisions", show_header=True, header_style="bold magenta")
+    table.add_column("Time", no_wrap=True)
+    table.add_column("Tool", no_wrap=True)
+    table.add_column("Verdict", no_wrap=True)
+    table.add_column("Findings", overflow="fold")
+    table.add_column("Id", no_wrap=True)
+    for row in result.items:
+        color = _VERDICT_COLORS.get(row.verdict, "white")
+        table.add_row(
+            datetime.fromtimestamp(row.timestamp).strftime("%m-%d %H:%M:%S"),
+            row.tool,
+            f"[{color}]{row.verdict}[/{color}]",
+            row.findings or "-",
+            row.id[:8],
+        )
+    if result.items:
+        console.print(table)
+    else:
+        console.print("No tool-call decisions match.")
+    counts = result.summary["by_verdict"]
+    console.print(
+        f"{result.total} match (page {result.page} of {result.pages}) | "
+        f"passed {counts['passed']} | flagged {counts['flagged']} | blocked {counts['blocked']}"
+    )
+
+@tool_guard_app.command("stats")
+def tool_guard_stats(
+    vault: Path = typer.Option("./ct_provenance.db", "--vault", help="Provenance vault to read."),
+):
+    """Counts of tool-call decisions by verdict and by tool."""
+    summary = summarize(_tool_call_rows(vault))
+    verdicts = Table(title="By verdict", show_header=True, header_style="bold magenta")
+    verdicts.add_column("Verdict")
+    verdicts.add_column("Count", justify="right")
+    for name in VERDICTS:
+        verdicts.add_row(f"[{_VERDICT_COLORS[name]}]{name}[/{_VERDICT_COLORS[name]}]", str(summary["by_verdict"][name]))
+    console.print(verdicts)
+    if summary["by_tool"]:
+        tools = Table(title="By tool", show_header=True, header_style="bold magenta")
+        tools.add_column("Tool")
+        tools.add_column("Count", justify="right")
+        for name, count in summary["by_tool"].items():
+            tools.add_row(name or "-", str(count))
+        console.print(tools)
+    console.print(f"{summary['total']} decision(s) in total.")
+
+@tool_guard_app.command("show")
+def tool_guard_show(
+    entry_id: str = typer.Argument(..., help="Record id, or a unique prefix of it (as listed)."),
+    vault: Path = typer.Option("./ct_provenance.db", "--vault", help="Provenance vault to read."),
+):
+    """Shows one tool-call decision."""
+    matches = [row for row in _tool_call_rows(vault) if row.id.startswith(entry_id)]
+    if len(matches) != 1:
+        console.print(f"[bold red]{len(matches)} records match {entry_id!r}; give a longer id.[/bold red]")
+        raise typer.Exit(code=1)
+    row = matches[0]
+    fields = [
+        ("Id", row.id),
+        ("Time", datetime.fromtimestamp(row.timestamp).isoformat(sep=" ", timespec="seconds")),
+        ("Tool", row.tool),
+        ("Verdict", row.verdict),
+        ("Mode", row.mode),
+        ("Findings", row.findings or "-"),
+        ("Judge", row.judge or "-"),
+        ("Provider", row.provider or "-"),
+        ("Model", row.llm_model or "-"),
+    ]
+    body = "\n".join(f"[bold]{label:<9}[/bold] {value}" for label, value in fields)
+    console.print(Panel(body, title="Tool-call decision", border_style=_VERDICT_COLORS.get(row.verdict, "white"), expand=False))
+    console.print("[dim]Arguments are not stored: the chain keeps only a hash of the call text.[/dim]")
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the server to."),
@@ -288,6 +392,10 @@ def serve(
         envvar="CT_TOOL_GUARD_JUDGE_MODEL",
         help=f"LiteLLM model that reviews suspicious tool calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL} with --tool-guard-judge-api-base. Off unless set.",
     ),
+    tool_guard_judge_api_base: Optional[str] = typer.Option(
+        None, "--tool-guard-judge-api-base", help="API base of the judge's OpenAI-compatible server, e.g. http://localhost:11434/v1."
+    ),
+    tool_guard_judge_fail_closed: bool = typer.Option(False, "--tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP),
 ):
     """Start the CT-Toolkit Guardrail & Web Audit Server."""
     guard_mode = _parse_tool_guard_mode(tool_guard_mode, "--tool-guard-mode")
@@ -310,6 +418,8 @@ def serve(
             tool_guard_mode=guard_mode,
             tool_guard_allowed_hosts=(*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])),
             tool_guard_judge_model=tool_guard_judge_model,
+            tool_guard_judge_api_base=tool_guard_judge_api_base,
+            tool_guard_judge_fail_closed=tool_guard_judge_fail_closed,
         )
         wrapper = TheseusWrapper(provider=judge_provider, config=config)
         
@@ -363,11 +473,12 @@ def proxy(
     upstream: str = typer.Option(..., "--upstream", help="Model API base URL, e.g. https://api.openai.com/v1."),
     host: str = typer.Option("127.0.0.1", "--host", help="Loopback only: the proxy has no authentication."),
     port: int = typer.Option(8788, "--port", help="Port to listen on."),
-    mode: str = typer.Option("observe", "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes or refuses high-severity tool calls."),
+    mode: str = typer.Option("observe", "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes high-severity tool calls before the harness sees them."),
     vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Provenance log that receives the verdicts."),
     tool_guard_allow_host: Optional[List[str]] = typer.Option(None, "--tool-guard-allow-host", help="Extra host tool calls may reach. Repeatable."),
     judge_model: Optional[str] = typer.Option(None, "--tool-guard-judge-model", envvar="CT_TOOL_GUARD_JUDGE_MODEL", help=f"LiteLLM model that reviews suspicious calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL}. Off unless set."),
-    judge_api_base: Optional[str] = typer.Option(None, "--tool-guard-judge-api-base", help="API base for the judge model, e.g. http://localhost:11434."),
+    judge_api_base: Optional[str] = typer.Option(None, "--tool-guard-judge-api-base", help="API base for the judge model, e.g. http://localhost:11434/v1."),
+    judge_fail_closed: bool = typer.Option(False, "--tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP),
 ):
     """Run a local proxy that reviews the tool calls of a model API. Point the harness's base URL at it."""
     if host not in LOOPBACK_HOSTS:
@@ -380,7 +491,12 @@ def proxy(
     from ct_toolkit.proxy import create_app
 
     judge = ToolCallJudge(judge_model, api_base=judge_api_base) if judge_model else None
-    guard = ToolGuard(guard_mode, (*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])), judge=judge)
+    guard = ToolGuard(
+        guard_mode,
+        (*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])),
+        judge=judge,
+        judge_fail_closed=judge_fail_closed,
+    )
     provenance = ProvenanceLog(vault_path=vault_path)
     console.print(f"Tool-call proxy [bold cyan]http://{host}:{port}[/bold cyan] -> {upstream}")
     console.print(f"  - Tool guard: [bold magenta]{guard_mode.value}[/bold magenta]  judge: {judge_model or 'off'}  vault: {vault_path}")
