@@ -1,3 +1,5 @@
+import re
+
 from typer.testing import CliRunner
 
 from ct_toolkit.cli import app
@@ -32,7 +34,8 @@ class TestCli:
         path = self._write(tmp_path, openai_response(("bash", "{}")))
         result = CliRunner().invoke(app, ["tool-guard", "check", path, "--mode", "bogus"])
         assert result.exit_code == 2
-        assert "--mode" in result.output
+        # CI forces colour, which splits option names with escape codes; compare the plain text.
+        assert "--mode" in re.sub(r"\x1b\[[0-9;]*m", "", result.output)
 
 
 class TestScrubCli:
