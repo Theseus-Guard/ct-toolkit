@@ -6,6 +6,7 @@ Main entry point for the Theseus Guard / CT Toolkit CLI.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import ssl
 import urllib.error
@@ -13,7 +14,7 @@ import urllib.parse
 import urllib.request
 from importlib.resources import files as package_files
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -21,7 +22,17 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ct_toolkit import TheseusWrapper, WrapperConfig, __version__
+from ct_toolkit.core.tool_guard import (
+    DEFAULT_ALLOWED_HOSTS,
+    ToolCallJudge,
+    ToolGuard,
+    ToolGuardMode,
+    conversation_text,
+    task_text,
+)
 from ct_toolkit.divergence.l3_icm import ICMRunner
+from ct_toolkit.provenance.log import ProvenanceLog
+from ct_toolkit.utils.trajectory_scrub import Scrubber
 from ct_toolkit.server import start_dashboard_server, start_server
 
 app = typer.Typer(
@@ -195,6 +206,59 @@ def audit(
     if not report.is_healthy:
         raise typer.Exit(code=1)
 
+def _parse_tool_guard_mode(value: str, param_hint: str) -> ToolGuardMode:
+    try:
+        return ToolGuardMode(value.lower())
+    except ValueError:
+        raise typer.BadParameter(f"expected 'observe' or 'enforce', got {value!r}", param_hint=param_hint)
+
+tool_guard_app = typer.Typer(help="Inspect the tool calls of a saved model response, without a model.")
+app.add_typer(tool_guard_app, name="tool-guard")
+
+@tool_guard_app.command("check")
+def tool_guard_check(
+    path: Path = typer.Argument(..., exists=True, dir_okay=False, help="JSON file with 'response' and optional 'tools', 'message', 'history', 'system'."),
+    mode: str = typer.Option("observe", "--mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' or 'enforce'."),
+    judge_model: Optional[str] = typer.Option(None, "--judge-model", help="LiteLLM model that reviews suspicious calls."),
+):
+    """Reviews the tool calls in a saved response. Exits 1 if any call has a high-severity finding."""
+    guard_mode = _parse_tool_guard_mode(mode, "--mode")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as e:
+        console.print(f"[bold red]Not valid JSON:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    judge = ToolCallJudge(judge_model) if judge_model else None
+    decisions = ToolGuard(guard_mode, judge=judge).review(
+        data.get("response") or {},
+        tools=data.get("tools"),
+        conversation=conversation_text(data.get("message") or "", data.get("history"), data.get("system")),
+        task=task_text(data.get("message") or "", data.get("history")),
+    )
+
+    table = Table(title=f"Tool guard ({guard_mode.value})", show_header=True, header_style="bold magenta")
+    table.add_column("#", justify="right")
+    table.add_column("Tool")
+    table.add_column("Verdict", justify="center")
+    table.add_column("Findings")
+    colors = {"passed": "green", "flagged": "yellow", "blocked": "red"}
+    for decision in decisions:
+        findings = ", ".join(str(finding) for finding in decision.findings) or "-"
+        table.add_row(
+            str(decision.index),
+            decision.call.name,
+            f"[{colors[decision.verdict]}]{decision.verdict.upper()}[/{colors[decision.verdict]}]",
+            findings,
+        )
+    if decisions:
+        console.print(table)
+    else:
+        console.print("No tool calls in the response.")
+
+    if any(decision.severe for decision in decisions):
+        raise typer.Exit(code=1)
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the server to."),
@@ -206,14 +270,31 @@ def serve(
     judge_provider: str = typer.Option("openai", "--judge-provider", help="LLM provider for L2/L3 judge calls."),
     judge_model: Optional[str] = typer.Option(None, "--judge-model", help="Model ID for L2/L3 judge calls."),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional Bearer token / API key for server endpoints."),
+    tool_guard_mode: str = typer.Option(
+        "observe",
+        "--tool-guard-mode",
+        envvar="CT_TOOL_GUARD_MODE",
+        help="'observe' only records tool-call findings; 'enforce' blocks responses with high-severity tool calls.",
+    ),
+    tool_guard_allow_host: Optional[List[str]] = typer.Option(
+        None, "--tool-guard-allow-host", help="Extra host tool calls may reach without the conversation naming it. Repeatable."
+    ),
+    tool_guard_judge_model: Optional[str] = typer.Option(
+        None,
+        "--tool-guard-judge-model",
+        envvar="CT_TOOL_GUARD_JUDGE_MODEL",
+        help="LiteLLM model that reviews suspicious tool calls, e.g. 'ollama/qwen2.5'. Off unless set.",
+    ),
 ):
     """Start the CT-Toolkit Guardrail & Web Audit Server."""
+    guard_mode = _parse_tool_guard_mode(tool_guard_mode, "--tool-guard-mode")
     console.print("Starting Guardrail & Audit Server...")
     console.print(f"  - Kernel: [bold yellow]{kernel}[/bold yellow]")
     console.print(f"  - Template: [bold green]{template}[/bold green]")
     console.print(f"  - Bind: [bold cyan]{host}:{port}[/bold cyan]")
+    console.print(f"  - Tool guard: [bold magenta]{guard_mode.value}[/bold magenta]")
     console.print(f"  - Web Audit Dashboard: [bold underline cyan]http://{host}:{port}/dashboard[/bold underline cyan]")
-    
+
     try:
         config = WrapperConfig(
             kernel_name=kernel,
@@ -222,7 +303,10 @@ def serve(
             policy_environment=policy_environment,
             judge_provider=judge_provider,
             judge_model=judge_model,
-            project_root=Path.cwd()
+            project_root=Path.cwd(),
+            tool_guard_mode=guard_mode,
+            tool_guard_allowed_hosts=(*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])),
+            tool_guard_judge_model=tool_guard_judge_model,
         )
         wrapper = TheseusWrapper(provider=judge_provider, config=config)
         
@@ -231,6 +315,73 @@ def serve(
     except Exception as e:
         console.print(f"[bold red]Failed to start server:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+@app.command()
+def scrub(
+    paths: List[Path] = typer.Argument(..., exists=True, help="Trajectory files or directories (JSON, JSON lines or text)."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write scrubbed copies here. Without it, only the report is printed."),
+    redact: Optional[List[str]] = typer.Option(None, "--redact", help="Literal value to mask everywhere. Repeatable."),
+    no_env: bool = typer.Option(False, "--no-env", help="Don't mask values of secret-looking environment variables."),
+    show: bool = typer.Option(False, "--show", help="List each hit with its masked preview."),
+):
+    """Redacts credentials, emails, home directory names and public IPs from agent trajectories. Dry run unless --out is given."""
+    scrubber = Scrubber(redact=redact or [], env_secrets=not no_env)
+    root = paths[0] if len(paths) == 1 and paths[0].is_dir() else None
+    report = scrubber.scrub_paths(paths, out=out, root=root)
+
+    counts = report.by_category
+    if counts:
+        table = Table(title="Redactions", show_header=True, header_style="bold magenta")
+        table.add_column("Category")
+        table.add_column("Count", justify="right")
+        for category, count in counts.most_common():
+            table.add_row(category, str(count))
+        console.print(table)
+    if show and report.hits:
+        detail = Table(title="Hits", show_header=True, header_style="bold magenta")
+        for column in ("File", "Location", "Category", "Value"):
+            detail.add_column(column)
+        for hit in report.hits:
+            detail.add_row(hit.file, hit.location, hit.category, hit.preview)
+        console.print(detail)
+
+    console.print(f"{len(report.hits)} redaction(s) in {report.files_changed} file(s).")
+    for skipped in report.skipped:
+        console.print(f"[yellow]Skipped (not UTF-8 text):[/yellow] {skipped}")
+    if out is None:
+        console.print("Dry run: nothing written. Pass --out DIR to write the scrubbed copies.")
+    else:
+        console.print(f"Scrubbed copies written to [bold cyan]{out}[/bold cyan]. Read the report before publishing.")
+
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+@app.command()
+def proxy(
+    upstream: str = typer.Option(..., "--upstream", help="Model API base URL, e.g. https://api.openai.com/v1."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Loopback only: the proxy has no authentication."),
+    port: int = typer.Option(8788, "--port", help="Port to listen on."),
+    mode: str = typer.Option("observe", "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes or refuses high-severity tool calls."),
+    vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Provenance log that receives the verdicts."),
+    tool_guard_allow_host: Optional[List[str]] = typer.Option(None, "--tool-guard-allow-host", help="Extra host tool calls may reach. Repeatable."),
+    judge_model: Optional[str] = typer.Option(None, "--tool-guard-judge-model", envvar="CT_TOOL_GUARD_JUDGE_MODEL", help="LiteLLM model that reviews suspicious calls. Off unless set."),
+    judge_api_base: Optional[str] = typer.Option(None, "--tool-guard-judge-api-base", help="API base for the judge model, e.g. http://localhost:11434."),
+):
+    """Run a local proxy that reviews the tool calls of a model API. Point the harness's base URL at it."""
+    if host not in LOOPBACK_HOSTS:
+        console.print(f"[bold red]Refusing to bind {host}:[/bold red] the proxy has no authentication, use a loopback address.")
+        raise typer.Exit(code=1)
+    guard_mode = _parse_tool_guard_mode(mode, "--tool-guard-mode")
+
+    import uvicorn
+
+    from ct_toolkit.proxy import create_app
+
+    judge = ToolCallJudge(judge_model, api_base=judge_api_base) if judge_model else None
+    guard = ToolGuard(guard_mode, (*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])), judge=judge)
+    provenance = ProvenanceLog(vault_path=vault_path)
+    console.print(f"Tool-call proxy [bold cyan]http://{host}:{port}[/bold cyan] -> {upstream}")
+    console.print(f"  - Tool guard: [bold magenta]{guard_mode.value}[/bold magenta]  judge: {judge_model or 'off'}  vault: {vault_path}")
+    uvicorn.run(create_app(upstream, guard, provenance), host=host, port=port)
 
 @app.command()
 def setup(
