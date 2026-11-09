@@ -23,8 +23,9 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ct_toolkit import TheseusWrapper, WrapperConfig, __version__
+from ct_toolkit.core import tool_guard_settings as guard_settings
+from ct_toolkit.core.tool_guard_settings import SettingsWatcher, ToolGuardSettings
 from ct_toolkit.core.tool_guard import (
-    DEFAULT_ALLOWED_HOSTS,
     ToolCallJudge,
     RECOMMENDED_JUDGE_MODEL,
     ToolGuard,
@@ -212,6 +213,30 @@ def audit(
 FULL_VERIFY_INTERVAL_DEFAULT_S = 300.0
 FAIL_CLOSED_HELP = "Block suspicious calls when the judge gives no usable answer (default: let them through)."
 
+def _guard_overrides(mode, allow_host, judge_model, judge_api_base, fail_closed) -> dict:
+    """The tool-guard options given explicitly on the command line. They win over the settings file."""
+    overrides: dict = {}
+    if mode is not None:
+        overrides["mode"] = _parse_tool_guard_mode(mode, "--tool-guard-mode").value
+    if allow_host is not None:
+        overrides["extra_hosts"] = list(allow_host)
+    if judge_model is not None:
+        overrides["judge_model"] = judge_model
+    if judge_api_base is not None:
+        overrides["judge_api_base"] = judge_api_base
+    if fail_closed is not None:
+        overrides["judge_fail_closed"] = fail_closed
+    return overrides
+
+
+def _effective_guard_settings(settings_file: Optional[str], overrides: dict) -> ToolGuardSettings:
+    try:
+        return SettingsWatcher(guard_settings.settings_path(settings_file), overrides=overrides).current()
+    except ValueError as e:
+        console.print(f"[bold red]Tool-call guard settings are invalid:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
 def _parse_tool_guard_mode(value: str, param_hint: str) -> ToolGuardMode:
     try:
         return ToolGuardMode(value.lower())
@@ -220,6 +245,76 @@ def _parse_tool_guard_mode(value: str, param_hint: str) -> ToolGuardMode:
 
 tool_guard_app = typer.Typer(help="Inspect the tool calls of a saved model response, without a model.")
 app.add_typer(tool_guard_app, name="tool-guard")
+
+tool_guard_config_app = typer.Typer(help="Show or change the tool-call guard settings file.")
+tool_guard_app.add_typer(tool_guard_config_app, name="config")
+_SETTINGS_FILE_HELP = "Settings file (default ./tool_guard_settings.json, or CT_TOOL_GUARD_SETTINGS)."
+
+
+@tool_guard_config_app.command("show")
+def tool_guard_config_show(
+    settings_file: Optional[str] = typer.Option(None, "--settings", envvar="CT_TOOL_GUARD_SETTINGS", help=_SETTINGS_FILE_HELP),
+):
+    """Shows the tool-call guard settings that proxy, server and dashboard use."""
+    path = guard_settings.settings_path(settings_file)
+    try:
+        stored = guard_settings.load(path)
+    except ValueError as e:
+        console.print(f"[bold red]Invalid settings file:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    effective = stored or ToolGuardSettings()
+    table = Table(title="Tool-call guard settings", show_header=True, header_style="bold magenta")
+    table.add_column("Setting")
+    table.add_column("Value")
+    table.add_row("mode", effective.mode)
+    table.add_row("extra allowed hosts", ", ".join(effective.extra_hosts) or "-")
+    table.add_row("judge model", effective.judge_model or "off")
+    table.add_row("judge API base", effective.judge_api_base or "-")
+    table.add_row("judge fails closed", "yes" if effective.judge_fail_closed else "no")
+    console.print(table)
+    console.print(f"Source: {'settings file' if stored is not None else 'built-in defaults'} ({path})")
+
+
+@tool_guard_config_app.command("set")
+def tool_guard_config_set(
+    settings_file: Optional[str] = typer.Option(None, "--settings", envvar="CT_TOOL_GUARD_SETTINGS", help=_SETTINGS_FILE_HELP),
+    mode: Optional[str] = typer.Option(None, "--mode", help="'observe' or 'enforce'."),
+    allow_host: Optional[List[str]] = typer.Option(None, "--allow-host", help="Extra allowed host. Repeatable. Replaces the list."),
+    judge_model: Optional[str] = typer.Option(None, "--judge-model", help="Judge model, e.g. openai/gemma-4-E4B-it."),
+    judge_api_base: Optional[str] = typer.Option(None, "--judge-api-base", help="Judge API base URL."),
+    clear_judge: bool = typer.Option(False, "--clear-judge", help="Turn the judge off (removes model and API base)."),
+    fail_closed: Optional[bool] = typer.Option(None, "--fail-closed/--fail-open", help="Block suspicious calls when the judge gives no answer."),
+):
+    """Changes the tool-call guard settings file. Only the options given are changed."""
+    path = guard_settings.settings_path(settings_file)
+    try:
+        current = guard_settings.load(path) or ToolGuardSettings()
+    except ValueError as e:
+        console.print(f"[bold red]Invalid settings file:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    data = current.to_dict()
+    if mode is not None:
+        data["mode"] = _parse_tool_guard_mode(mode, "--mode").value
+    if allow_host is not None:
+        data["extra_hosts"] = list(allow_host)
+    if clear_judge:
+        data["judge_model"] = None
+        data["judge_api_base"] = None
+    if judge_model is not None:
+        data["judge_model"] = judge_model
+    if judge_api_base is not None:
+        data["judge_api_base"] = judge_api_base
+    if fail_closed is not None:
+        data["judge_fail_closed"] = fail_closed
+    try:
+        new = guard_settings.validate(data)
+    except ValueError as e:
+        console.print(f"[bold red]Not saved:[/bold red] {e}")
+        raise typer.Exit(code=2)
+    guard_settings.save(path, new)
+    console.print(f"Saved {path}. Running proxy and server processes pick the change up on their next request.")
+    tool_guard_config_show(settings_file=str(path))
+
 
 @tool_guard_app.command("check")
 def tool_guard_check(
@@ -378,14 +473,18 @@ def serve(
     judge_provider: str = typer.Option("openai", "--judge-provider", help="LLM provider for L2/L3 judge calls."),
     judge_model: Optional[str] = typer.Option(None, "--judge-model", help="Model ID for L2/L3 judge calls."),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional Bearer token / API key for server endpoints."),
-    tool_guard_mode: str = typer.Option(
-        "observe",
+    tool_guard_settings: Optional[str] = typer.Option(
+        None, "--tool-guard-settings", envvar="CT_TOOL_GUARD_SETTINGS",
+        help="Settings file for the tool-call guard (default ./tool_guard_settings.json). Edited from the dashboard too.",
+    ),
+    tool_guard_mode: Optional[str] = typer.Option(
+        None,
         "--tool-guard-mode",
         envvar="CT_TOOL_GUARD_MODE",
-        help="'observe' only records tool-call findings; 'enforce' blocks responses with high-severity tool calls.",
+        help="'observe' only records tool-call findings; 'enforce' blocks responses with high-severity tool calls. Overrides the settings file.",
     ),
     tool_guard_allow_host: Optional[List[str]] = typer.Option(
-        None, "--tool-guard-allow-host", help="Extra host tool calls may reach without the conversation naming it. Repeatable."
+        None, "--tool-guard-allow-host", help="Extra host tool calls may reach without the conversation naming it. Repeatable. Replaces the file's list."
     ),
     tool_guard_judge_model: Optional[str] = typer.Option(
         None,
@@ -396,19 +495,25 @@ def serve(
     tool_guard_judge_api_base: Optional[str] = typer.Option(
         None, "--tool-guard-judge-api-base", help="API base of the judge's OpenAI-compatible server, e.g. http://localhost:11434/v1."
     ),
-    tool_guard_judge_fail_closed: bool = typer.Option(False, "--tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP),
+    tool_guard_judge_fail_closed: Optional[bool] = typer.Option(
+        None, "--tool-guard-judge-fail-closed/--no-tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP
+    ),
     full_verify_interval: float = typer.Option(
         FULL_VERIFY_INTERVAL_DEFAULT_S, "--full-verify-interval", envvar="CT_FULL_VERIFY_INTERVAL", min=5.0,
         help="Seconds between full chain verifications. Edits to old entries show within this time.",
     ),
 ):
     """Start the CT-Toolkit Guardrail & Web Audit Server."""
-    guard_mode = _parse_tool_guard_mode(tool_guard_mode, "--tool-guard-mode")
+    overrides = _guard_overrides(
+        tool_guard_mode, tool_guard_allow_host, tool_guard_judge_model, tool_guard_judge_api_base, tool_guard_judge_fail_closed
+    )
+    effective = _effective_guard_settings(tool_guard_settings, overrides)
+    guard_mode = ToolGuardMode(effective.mode)
     console.print("Starting Guardrail & Audit Server...")
     console.print(f"  - Kernel: [bold yellow]{kernel}[/bold yellow]")
     console.print(f"  - Template: [bold green]{template}[/bold green]")
     console.print(f"  - Bind: [bold cyan]{host}:{port}[/bold cyan]")
-    console.print(f"  - Tool guard: [bold magenta]{guard_mode.value}[/bold magenta]")
+    console.print(f"  - Tool guard: [bold magenta]{guard_mode.value}[/bold magenta] (settings: {guard_settings.settings_path(tool_guard_settings)})")
     console.print(f"  - Web Audit Dashboard: [bold underline cyan]http://{host}:{port}/dashboard[/bold underline cyan]")
 
     try:
@@ -421,15 +526,23 @@ def serve(
             judge_model=judge_model,
             project_root=Path.cwd(),
             tool_guard_mode=guard_mode,
-            tool_guard_allowed_hosts=(*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])),
-            tool_guard_judge_model=tool_guard_judge_model,
-            tool_guard_judge_api_base=tool_guard_judge_api_base,
-            tool_guard_judge_fail_closed=tool_guard_judge_fail_closed,
+            tool_guard_allowed_hosts=effective.allowed_hosts(),
+            tool_guard_judge_model=effective.judge_model,
+            tool_guard_judge_api_base=effective.judge_api_base,
+            tool_guard_judge_fail_closed=effective.judge_fail_closed,
         )
         wrapper = TheseusWrapper(provider=judge_provider, config=config)
-        
-        # Start the uvicorn server
-        start_server(wrapper=wrapper, host=host, port=port, api_key=api_key, full_verify_interval_s=full_verify_interval)
+
+        # Start the uvicorn server; the settings file is re-read on change and the overrides keep winning
+        start_server(
+            wrapper=wrapper,
+            host=host,
+            port=port,
+            api_key=api_key,
+            full_verify_interval_s=full_verify_interval,
+            tool_guard_settings=str(guard_settings.settings_path(tool_guard_settings)),
+            tool_guard_overrides=overrides,
+        )
     except Exception as e:
         console.print(f"[bold red]Failed to start server:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -478,34 +591,43 @@ def proxy(
     upstream: str = typer.Option(..., "--upstream", help="Model API base URL, e.g. https://api.openai.com/v1."),
     host: str = typer.Option("127.0.0.1", "--host", help="Loopback only: the proxy has no authentication."),
     port: int = typer.Option(8788, "--port", help="Port to listen on."),
-    mode: str = typer.Option("observe", "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes high-severity tool calls before the harness sees them."),
+    mode: Optional[str] = typer.Option(None, "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes high-severity tool calls before the harness sees them. Overrides the settings file."),
     vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Provenance log that receives the verdicts."),
-    tool_guard_allow_host: Optional[List[str]] = typer.Option(None, "--tool-guard-allow-host", help="Extra host tool calls may reach. Repeatable."),
+    tool_guard_allow_host: Optional[List[str]] = typer.Option(None, "--tool-guard-allow-host", help="Extra host tool calls may reach. Repeatable. Replaces the file's list."),
     judge_model: Optional[str] = typer.Option(None, "--tool-guard-judge-model", envvar="CT_TOOL_GUARD_JUDGE_MODEL", help=f"LiteLLM model that reviews suspicious calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL}. Off unless set."),
     judge_api_base: Optional[str] = typer.Option(None, "--tool-guard-judge-api-base", help="API base for the judge model, e.g. http://localhost:11434/v1."),
-    judge_fail_closed: bool = typer.Option(False, "--tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP),
+    judge_fail_closed: Optional[bool] = typer.Option(None, "--tool-guard-judge-fail-closed/--no-tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP),
+    tool_guard_settings: Optional[str] = typer.Option(
+        None, "--tool-guard-settings", envvar="CT_TOOL_GUARD_SETTINGS",
+        help="Settings file for the tool-call guard (default ./tool_guard_settings.json). Edited from the dashboard too.",
+    ),
 ):
-    """Run a local proxy that reviews the tool calls of a model API. Point the harness's base URL at it."""
+    """Run a local proxy that reviews the tool calls of a model API. Point the harness's base URL at it.
+
+    The settings file is re-read on every request, so a change made in the dashboard applies without a restart."""
     if host not in LOOPBACK_HOSTS:
         console.print(f"[bold red]Refusing to bind {host}:[/bold red] the proxy has no authentication, use a loopback address.")
         raise typer.Exit(code=1)
-    guard_mode = _parse_tool_guard_mode(mode, "--tool-guard-mode")
+    overrides = _guard_overrides(mode, tool_guard_allow_host, judge_model, judge_api_base, judge_fail_closed)
+    watcher = SettingsWatcher(guard_settings.settings_path(tool_guard_settings), overrides=overrides)
+    effective = _effective_guard_settings(tool_guard_settings, overrides)
 
     import uvicorn
 
     from ct_toolkit.proxy import create_app
 
-    judge = ToolCallJudge(judge_model, api_base=judge_api_base) if judge_model else None
+    judge = ToolCallJudge(effective.judge_model, api_base=effective.judge_api_base) if effective.judge_model else None
     guard = ToolGuard(
-        guard_mode,
-        (*DEFAULT_ALLOWED_HOSTS, *(tool_guard_allow_host or [])),
+        ToolGuardMode(effective.mode),
+        effective.allowed_hosts(),
         judge=judge,
-        judge_fail_closed=judge_fail_closed,
+        judge_fail_closed=effective.judge_fail_closed,
     )
     provenance = ProvenanceLog(vault_path=vault_path)
     console.print(f"Tool-call proxy [bold cyan]http://{host}:{port}[/bold cyan] -> {upstream}")
-    console.print(f"  - Tool guard: [bold magenta]{guard_mode.value}[/bold magenta]  judge: {judge_model or 'off'}  vault: {vault_path}")
-    uvicorn.run(create_app(upstream, guard, provenance), host=host, port=port)
+    console.print(f"  - Tool guard: [bold magenta]{effective.mode}[/bold magenta]  judge: {effective.judge_model or 'off'}  vault: {vault_path}")
+    console.print(f"  - Settings: {watcher.path} (re-read on change)")
+    uvicorn.run(create_app(upstream, guard, provenance, settings=watcher), host=host, port=port)
 
 @app.command()
 def setup(
@@ -788,6 +910,10 @@ def dashboard_cmd(
         FULL_VERIFY_INTERVAL_DEFAULT_S, "--full-verify-interval", envvar="CT_FULL_VERIFY_INTERVAL", min=5.0,
         help="Seconds between full chain verifications (--web). Edits to old entries show within this time.",
     ),
+    tool_guard_settings: Optional[str] = typer.Option(
+        None, "--tool-guard-settings", envvar="CT_TOOL_GUARD_SETTINGS",
+        help="Settings file for the tool-call guard (default ./tool_guard_settings.json). Edited from the dashboard too.",
+    ),
 ):
     """Display the terminal audit dashboard or launch the interactive Web Audit Dashboard (--web)."""
     if web:
@@ -801,6 +927,7 @@ def dashboard_cmd(
             port=port,
             api_key=api_key,
             full_verify_interval_s=full_verify_interval,
+            tool_guard_settings=str(guard_settings.settings_path(tool_guard_settings)),
         )
         return
     _render_status_dashboard(vault_path=vault_path, vault_type=vault_type, limit=limit)

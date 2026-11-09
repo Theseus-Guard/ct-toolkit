@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from ct_toolkit.core.tool_guard import ToolCallDecision, ToolGuard, ToolGuardMode, without_calls
+from ct_toolkit.core.tool_guard_settings import SettingsWatcher, apply_to_guard
 from ct_toolkit.provenance.log import ProvenanceLog
 from ct_toolkit.utils.logger import get_logger
 
@@ -290,13 +291,21 @@ def create_app(
     guard: ToolGuard,
     provenance: Optional[ProvenanceLog] = None,
     transport: Optional[httpx.AsyncBaseTransport] = None,
+    settings: Optional[SettingsWatcher] = None,
 ) -> Starlette:
+    """`settings`, when given, is re-read on every request: a change to the settings file takes effect at once."""
     upstream = upstream.rstrip("/")
     reviewer = ProxyReviewer(guard, provenance)
+    applied: dict[str, object] = {}  # the settings last applied to the guard; None until the first request
     # No read timeout: streams can idle between events.
     client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(None, connect=10.0))
 
     async def forward(request: Request) -> Response:
+        if settings is not None:
+            current = settings.current()
+            if current != applied.get("settings"):
+                apply_to_guard(guard, current)
+                applied["settings"] = current
         body = await request.body()
         try:
             request_json = json.loads(body) if body else None

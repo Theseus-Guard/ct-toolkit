@@ -22,6 +22,9 @@ from ct_toolkit.provenance.log import ProvenanceLog
 from ct_toolkit.provenance.log import DIVERGENCE_TIERS, resolve_tier
 from ct_toolkit.provenance.tool_calls import query_page
 from ct_toolkit.utils.cache import GenerationCache
+from ct_toolkit.core import tool_guard_settings as guard_settings
+from ct_toolkit.core.tool_guard_settings import SettingsWatcher, apply_to_guard
+from ct_toolkit.core.tool_guard import DEFAULT_ALLOWED_HOSTS
 from ct_toolkit.utils.logger import get_logger
 from ct_toolkit.core.exceptions import (
     ConfigurationTamperingError,
@@ -262,6 +265,7 @@ def _review_guardrail_tool_calls(request: GuardrailRequest, user_text: str) -> O
     The guardrail API can only block the whole response, not single calls."""
     if not request.tool_calls:
         return None
+    _sync_guard_settings()
     raw_response = {"choices": [{"message": {"tool_calls": request.tool_calls}}]}
     model = str((request.request_data or {}).get("model") or "unknown")
     _, decisions = _wrapper_instance._review_tool_calls(
@@ -306,6 +310,20 @@ def _apply_integrity_settings(log: ProvenanceLog) -> None:
 _dashboard_log_cache: Optional[tuple[tuple[str, str], ProvenanceLog]] = None
 DASHBOARD_POLL_INTERVAL_S = 5.0  # background integrity check interval
 _full_verify_interval_s: Optional[float] = None
+_tool_guard_settings_path: Optional[str] = None
+_guard_watcher: Optional[SettingsWatcher] = None
+_guard_applied: Optional[guard_settings.ToolGuardSettings] = None
+
+
+def _sync_guard_settings() -> None:
+    """Applies the settings file to the guardrail server's tool guard whenever the file has changed."""
+    global _guard_applied
+    if _guard_watcher is None or _wrapper_instance is None:
+        return
+    current = _guard_watcher.current()
+    if current != _guard_applied:
+        apply_to_guard(_wrapper_instance._tool_guard, current)
+        _guard_applied = current
 _read_cache = GenerationCache(maxsize=128, max_age_s=30.0)
 GENERATION_CHECK_INTERVAL_S = 1.0  # how often a process asks the database for the generation (one round trip)
 _generation_seen: dict[int, tuple[int, float]] = {}
@@ -528,6 +546,78 @@ def dashboard_tool_calls_api(
         logger.error(f"Dashboard tool-calls API error: {exc}")
         raise HTTPException(status_code=500, detail="Failed to read provenance tool calls.")
     return JSONResponse(content=result.to_dict(), headers=_SECURITY_HEADERS)
+
+
+def _tool_guard_file() -> Path:
+    return guard_settings.settings_path(_tool_guard_settings_path)
+
+
+def _tool_guard_payload(path: Path, stored: Optional[guard_settings.ToolGuardSettings], error: Optional[str]) -> Dict[str, Any]:
+    effective = stored or guard_settings.ToolGuardSettings()
+    return {
+        "path": str(path),
+        "source": "file" if stored is not None else "defaults",
+        "settings": effective.to_dict(),
+        "default_allowed_hosts": list(DEFAULT_ALLOWED_HOSTS),
+        "modes": ["observe", "enforce"],
+        "file_error": error,
+    }
+
+
+@app.get("/api/dashboard/tool-guard", dependencies=[Depends(_verify_api_key)])
+async def dashboard_tool_guard_get() -> JSONResponse:
+    """The tool-call guard settings in effect for the proxy and the guardrail server, and where they come from."""
+    path = _tool_guard_file()
+    try:
+        stored = guard_settings.load(path)
+        error = None
+    except ValueError as exc:
+        stored, error = None, str(exc)
+    return JSONResponse(content=_tool_guard_payload(path, stored, error), headers=_SECURITY_HEADERS)
+
+
+@app.put("/api/dashboard/tool-guard", dependencies=[Depends(_verify_api_key)])
+async def dashboard_tool_guard_put(request: Request) -> JSONResponse:
+    """Validates and saves the tool-call guard settings, and records which settings changed in the provenance chain."""
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="the request body must be JSON")
+    try:
+        new = guard_settings.validate(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    path = _tool_guard_file()
+    try:
+        previous = guard_settings.load(path) or guard_settings.ToolGuardSettings()
+    except ValueError:
+        previous = guard_settings.ToolGuardSettings()
+    changed = [name for name in ("mode", "extra_hosts", "judge_model", "judge_api_base", "judge_fail_closed")
+               if getattr(previous, name) != getattr(new, name)]
+    try:
+        guard_settings.save(path, new)
+    except OSError as exc:
+        logger.error(f"Could not save tool-call guard settings: {exc}")
+        raise HTTPException(status_code=500, detail="could not write the settings file")
+
+    if changed:
+        try:
+            _dashboard_log().record(
+                request_text="tool-call guard settings",
+                response_text="settings changed: " + ", ".join(changed),
+                metadata={
+                    "event": "tool_guard_settings_changed",
+                    "mode": new.mode,
+                    "changed": ",".join(changed),
+                    "extra_hosts": len(new.extra_hosts),
+                    "judge_model": new.judge_model or "",
+                    "judge_fail_closed": new.judge_fail_closed,
+                },
+            )
+        except Exception as exc:
+            logger.error(f"Tool-call guard settings saved but not recorded in the provenance chain: {exc}")
+    return JSONResponse(content=_tool_guard_payload(path, new, None), headers=_SECURITY_HEADERS)
 
 
 @app.get("/", include_in_schema=False)
@@ -911,6 +1001,23 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     th.sortable:hover { color: var(--text-main); }
     .sort-ind { color: var(--accent-cyan); margin-left: 4px; font-family: var(--font-mono); }
     .text-cell { max-width: 320px; white-space: normal; word-break: break-word; }
+    .tg-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 14px; }
+    .tg-summary .kpi-value { font-size: 1.05rem; word-break: break-all; }
+    .tg-form { display: flex; flex-direction: column; gap: 16px; }
+    .tg-field { border: 0; padding: 0; margin: 0; min-width: 0; }
+    .tg-label, .tg-legend { display: block; font-size: 0.84rem; font-weight: 600; color: var(--text-main); margin-bottom: 6px; padding: 0; }
+    .tg-help { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+    .tg-input { width: 100%; max-width: 520px; box-sizing: border-box; font-family: var(--font-mono); font-size: 0.82rem; }
+    textarea.tg-input { resize: vertical; }
+    .tg-choice { display: flex; align-items: center; gap: 8px; font-size: 0.86rem; margin: 4px 0; cursor: pointer; }
+    .tg-box { display: block; padding: 12px 14px; border-radius: 10px; font-size: 0.84rem; line-height: 1.5; }
+    .tg-box p { margin: 0 0 8px; }
+    .tg-box.warn { background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.45); color: #fcd34d; }
+    .tg-box.error { background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.45); color: #fca5a5; }
+    .tg-box.warn .tg-choice { margin-bottom: 0; }
+    .tg-summary + .tg-box { margin-bottom: 14px; }
+    .tg-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .tg-status { font-size: 0.84rem; color: #34d399; }
 
     footer {
       margin-top: 28px;
@@ -1114,6 +1221,77 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <button class="pill-btn" id="tc-next" type="button">Next &#x203A;</button>
           </div>
         </div>
+      </div>
+
+      <div class="card" id="tool-guard-card">
+        <div class="section-header">
+          <div class="section-title">Tool-Call Guard Settings</div>
+        </div>
+        <div class="tg-summary" aria-live="polite">
+          <div class="card">
+            <div class="kpi-label">Effective mode</div>
+            <div class="kpi-value" id="tg-sum-mode">&#x2014;</div>
+          </div>
+          <div class="card">
+            <div class="kpi-label">Source</div>
+            <div class="kpi-value" id="tg-sum-source">&#x2014;</div>
+          </div>
+          <div class="card">
+            <div class="kpi-label">Settings file</div>
+            <div class="kpi-value mono" id="tg-sum-path">&#x2014;</div>
+          </div>
+        </div>
+        <div class="tg-box warn" id="tg-file-error" role="alert" style="display: none;"></div>
+        <div class="tg-box error" id="tg-load-error" role="alert" style="display: none; margin-bottom: 14px;"></div>
+        <form id="tg-form" class="tg-form" novalidate>
+          <fieldset class="tg-field" id="tg-mode">
+            <legend class="tg-legend">Mode</legend>
+            <label class="tg-choice" for="tg-mode-observe">
+              <input type="radio" name="tg-mode" id="tg-mode-observe" value="observe" checked />
+              Observe (default): records tool calls only
+            </label>
+            <label class="tg-choice" for="tg-mode-enforce">
+              <input type="radio" name="tg-mode" id="tg-mode-enforce" value="enforce" />
+              Enforce: removes high-severity tool calls before the agent runs them
+            </label>
+            <div class="tg-box warn" id="tg-enforce-warning" style="display: none; margin-top: 10px;">
+              <p>Enforce changes what agents can run. High-severity tool calls are removed before the agent runs them.</p>
+              <label class="tg-choice" for="tg-ack">
+                <input type="checkbox" id="tg-ack" />
+                I understand
+              </label>
+            </div>
+          </fieldset>
+          <div class="tg-field">
+            <div class="tg-help">Already allowed by default: <span class="mono" id="tg-default-hosts">loading...</span></div>
+            <label class="tg-label" for="tg-hosts">Extra allowed hosts</label>
+            <textarea id="tg-hosts" class="api-input tg-input" rows="4" placeholder="one host per line, or comma separated" aria-describedby="tg-hosts-help" spellcheck="false"></textarea>
+            <div class="tg-help" id="tg-hosts-help">Hosts that tool calls may reach beyond the defaults, for example internal.example.com.</div>
+          </div>
+          <div class="tg-field">
+            <label class="tg-label" for="tg-judge-model">Judge model</label>
+            <input type="text" id="tg-judge-model" class="api-input tg-input" placeholder="openai/gemma-4-E4B-it" maxlength="500" autocomplete="off" aria-describedby="tg-judge-model-help" />
+            <div class="tg-help" id="tg-judge-model-help">The judge is off when this is empty.</div>
+          </div>
+          <div class="tg-field">
+            <label class="tg-label" for="tg-judge-base">Judge API base URL</label>
+            <input type="text" id="tg-judge-base" class="api-input tg-input" placeholder="http://localhost:8090/v1" maxlength="500" autocomplete="off" aria-describedby="tg-judge-base-help" />
+            <div class="tg-help" id="tg-judge-base-help">OpenAI-compatible base URL, e.g. http://localhost:8090/v1</div>
+          </div>
+          <div class="tg-field">
+            <label class="tg-choice" for="tg-fail-closed">
+              <input type="checkbox" id="tg-fail-closed" aria-describedby="tg-fail-closed-help" />
+              Fail closed
+            </label>
+            <div class="tg-help" id="tg-fail-closed-help">Block a suspicious call when the judge gives no answer.</div>
+          </div>
+          <div class="tg-actions">
+            <button type="submit" class="pill-btn" id="tg-save" disabled>Save</button>
+            <button type="button" class="pill-btn" id="tg-reset">Reset</button>
+            <span class="tg-status" id="tg-status" role="status"></span>
+          </div>
+          <div class="tg-box error" id="tg-error" role="alert" style="display: none;"></div>
+        </form>
       </div>
     </div>
 
@@ -1466,6 +1644,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     function refreshDashboard() {
       fetchTelemetry();
       fetchToolCalls();
+      // Poll refreshes only the read-only summary; the form is filled on first load.
+      fetchToolGuard(!toolGuardState.loaded);
     }
 
     function setToolQuery(key, value) {
@@ -1511,6 +1691,151 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       });
     });
 
+    // Tool-call guard settings. The read-only summary refreshes with the poll. The form is filled only on first load,
+    // after a Save and on Reset, so the poll never overwrites what the operator is typing.
+    const toolGuardState = { loaded: false, saving: false };
+
+    function setShown(el, shown) {
+      el.style.display = shown ? '' : 'none';
+    }
+
+    function showToolGuardLoadError(message) {
+      const box = document.getElementById('tg-load-error');
+      box.textContent = message;
+      setShown(box, Boolean(message));
+    }
+
+    function showToolGuardError(message) {
+      const box = document.getElementById('tg-error');
+      box.textContent = message;
+      setShown(box, Boolean(message));
+    }
+
+    function showToolGuardStatus(text) {
+      document.getElementById('tg-status').textContent = text;
+    }
+
+    function isToolGuardEnforce() {
+      return document.getElementById('tg-mode-enforce').checked;
+    }
+
+    function splitToolGuardHosts(value) {
+      return value.split(/[\n,]/).map(h => h.trim()).filter(h => h.length > 0);
+    }
+
+    function updateToolGuardControls() {
+      const enforce = isToolGuardEnforce();
+      const ack = document.getElementById('tg-ack');
+      setShown(document.getElementById('tg-enforce-warning'), enforce);
+      // Save stays off until the saved values are loaded, so an empty form can never overwrite the file.
+      document.getElementById('tg-save').disabled = !toolGuardState.loaded || toolGuardState.saving || (enforce && !ack.checked);
+    }
+
+    function renderToolGuardSummary(data) {
+      const mode = data.settings.mode;
+      const modeEl = document.getElementById('tg-sum-mode');
+      modeEl.textContent = mode;
+      modeEl.className = `kpi-value ${mode === 'enforce' ? 'tone-flagged' : 'tone-passed'}`;
+      document.getElementById('tg-sum-source').textContent = data.source === 'file' ? 'saved file' : 'built-in defaults';
+      document.getElementById('tg-sum-path').textContent = data.path;
+      document.getElementById('tg-default-hosts').textContent = (data.default_allowed_hosts || []).join(', ') || 'none';
+      const fileError = document.getElementById('tg-file-error');
+      fileError.textContent = data.file_error ? `Settings file error: ${data.file_error}. Saving will replace this file.` : '';
+      setShown(fileError, Boolean(data.file_error));
+    }
+
+    function populateToolGuardForm(data) {
+      const s = data.settings;
+      document.getElementById(s.mode === 'enforce' ? 'tg-mode-enforce' : 'tg-mode-observe').checked = true;
+      document.getElementById('tg-ack').checked = false;
+      document.getElementById('tg-hosts').value = (s.extra_hosts || []).join('\n');
+      document.getElementById('tg-judge-model').value = s.judge_model || '';
+      document.getElementById('tg-judge-base').value = s.judge_api_base || '';
+      document.getElementById('tg-fail-closed').checked = Boolean(s.judge_fail_closed);
+      toolGuardState.loaded = true;
+      updateToolGuardControls();
+    }
+
+    async function fetchToolGuard(populateForm) {
+      try {
+        const res = await fetch('/api/dashboard/tool-guard', { headers: dashboardHeaders() });
+        if (res.status === 401) {
+          showToolGuardLoadError('Authentication required (401): enter your Server API Key in the top-right box.');
+          return;
+        }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const detail = typeof err.detail === 'string' ? err.detail : res.statusText;
+          showToolGuardLoadError(`Tool-call guard settings error (${res.status}): ${detail}`);
+          return;
+        }
+        const data = await res.json();
+        showToolGuardLoadError('');
+        renderToolGuardSummary(data);
+        if (populateForm) populateToolGuardForm(data);
+      } catch (err) {
+        showToolGuardLoadError(`Failed to load tool-call guard settings: ${err.message}`);
+      }
+    }
+
+    async function saveToolGuard(event) {
+      event.preventDefault();
+      if (toolGuardState.saving || (isToolGuardEnforce() && !document.getElementById('tg-ack').checked)) return;
+      const body = {
+        mode: isToolGuardEnforce() ? 'enforce' : 'observe',
+        extra_hosts: splitToolGuardHosts(document.getElementById('tg-hosts').value),
+        judge_model: document.getElementById('tg-judge-model').value.trim() || null,
+        judge_api_base: document.getElementById('tg-judge-base').value.trim() || null,
+        judge_fail_closed: document.getElementById('tg-fail-closed').checked,
+      };
+      toolGuardState.saving = true;
+      updateToolGuardControls();
+      showToolGuardError('');
+      showToolGuardStatus('Saving...');
+      try {
+        const res = await fetch('/api/dashboard/tool-guard', {
+          method: 'PUT',
+          headers: { ...dashboardHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          showToolGuardStatus('');
+          showToolGuardError('Authentication required (401): enter your Server API Key in the top-right box.');
+        } else if (!res.ok) {
+          showToolGuardStatus('');
+          showToolGuardError(typeof data.detail === 'string' ? data.detail : `Save failed (${res.status}): ${res.statusText}`);
+        } else {
+          renderToolGuardSummary(data);
+          populateToolGuardForm(data);
+          showToolGuardStatus('Saved');
+        }
+      } catch (err) {
+        showToolGuardStatus('');
+        showToolGuardError(`Failed to save: ${err.message}`);
+      } finally {
+        toolGuardState.saving = false;
+        updateToolGuardControls();
+      }
+    }
+
+    function resetToolGuardForm() {
+      showToolGuardError('');
+      showToolGuardStatus('');
+      fetchToolGuard(true);
+    }
+
+    document.getElementById('tg-form').addEventListener('submit', saveToolGuard);
+    document.getElementById('tg-reset').addEventListener('click', resetToolGuardForm);
+    document.querySelectorAll('input[name="tg-mode"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        // Each switch to enforce needs a fresh acknowledgement.
+        document.getElementById('tg-ack').checked = false;
+        updateToolGuardControls();
+      });
+    });
+    document.getElementById('tg-ack').addEventListener('change', updateToolGuardControls);
+
     function toggleAutoRefresh() {
       autoRefresh = !autoRefresh;
       const btn = document.getElementById('toggle-live-btn');
@@ -1544,11 +1869,15 @@ def start_server(
     port: int,
     api_key: Optional[str] = None,
     full_verify_interval_s: Optional[float] = None,
+    tool_guard_settings: Optional[str] = None,
+    tool_guard_overrides: Optional[dict] = None,
 ):
     """Inject wrapper and start uvicorn server."""
-    global _wrapper_instance, _full_verify_interval_s
+    global _wrapper_instance, _full_verify_interval_s, _guard_watcher, _guard_applied
     _validate_bind_security(host, api_key)
     _full_verify_interval_s = full_verify_interval_s
+    _guard_watcher = SettingsWatcher(guard_settings.settings_path(tool_guard_settings), overrides=tool_guard_overrides)
+    _guard_applied = None
     _wrapper_instance = wrapper
     if api_key is not None:
         configure_server_auth(api_key)
@@ -1563,9 +1892,12 @@ def start_dashboard_server(
     port: int = 8001,
     api_key: Optional[str] = None,
     full_verify_interval_s: Optional[float] = None,
+    tool_guard_settings: Optional[str] = None,
 ) -> None:
     """Starts the standalone Web Audit & Telemetry Dashboard server."""
+    global _tool_guard_settings_path
     _validate_bind_security(host, api_key)
+    _tool_guard_settings_path = tool_guard_settings
     configure_dashboard_vault(vault_path=vault_path, vault_type=vault_type, full_verify_interval_s=full_verify_interval_s)
     if api_key is not None:
         configure_server_auth(api_key)
