@@ -6,6 +6,7 @@ import pytest
 
 from ct_toolkit.core.tool_guard import (
     UNDECLARED_TOOL,
+    _argument_text,
     ToolCall,
     ToolCallJudge,
     ToolGuard,
@@ -283,3 +284,33 @@ class TestResponsesToolCalls:
         ]}
         cleaned = without_calls(raw, {1})
         assert [item["call_id"] for item in cleaned["output"]] == ["a"]
+
+
+class TestPlatformForms:
+    """Linux, macOS and Windows spellings of the same risky actions. Tested on strings, not on each OS."""
+
+    @pytest.mark.parametrize(
+        ("command", "finding_id"),
+        [
+            (r"type C:\Users\jane\.ssh\id_rsa", "secrets.credential_file"),
+            (r"type %USERPROFILE%\.aws\credentials", "secrets.credential_file"),
+            (r"Get-Content $env:USERPROFILE\.netrc", "secrets.credential_file"),
+            (r"dir C:\Users\jane\AppData\Roaming\Microsoft\Credentials", "secrets.windows_credential_store"),
+            ("cmdkey /list", "secrets.windows_credential_store"),
+            ("Get-ChildItem Env: | Out-File out.txt", "harness.env_dump"),
+            ("printenv", "harness.env_dump"),
+            ("cat /Users/jane/.aws/credentials", "secrets.credential_file"),
+            ("cat ~/.ssh/id_ed25519", "secrets.credential_file"),
+        ],
+    )
+    def test_risky_form_is_flagged(self, command, finding_id):
+        raw = openai_response(("bash", json.dumps({"command": command})))
+        assert finding_id in [f.id for f in ToolGuard().review(raw, tools=OPENAI_TOOLS)[0].findings]
+
+    def test_ordinary_windows_path_is_not_flagged(self):
+        raw = openai_response(("bash", json.dumps({"command": r"dir C:\Users\jane\Work\proj"})))
+        assert ToolGuard().review(raw, tools=OPENAI_TOOLS)[0].findings == ()
+
+    def test_arguments_are_decoded_before_matching(self):
+        assert _argument_text(json.dumps({"command": r"type C:\Users\x"})) == r"type C:\Users\x"
+        assert _argument_text("not json") == "not json"

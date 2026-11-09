@@ -62,9 +62,15 @@ DEFAULT_ALLOWED_HOSTS: tuple[str, ...] = (
     "huggingface.co",
 )
 
+# Platform notes: /proc, unshare and nsenter are Linux-only, so their findings only matter there. The
+# credential-file and environment-dump patterns cover Linux, macOS and Windows path and shell forms.
+_HOME = (
+    r"(?:~|\$HOME|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s\"']+|/Users/[^/\s\"']+|/root"
+    r"|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s\"']+)"
+)
 RISKY_PATTERNS: tuple[tuple[Finding, re.Pattern[str]], ...] = (
     (
-        Finding("harness.proc_environ", Severity.HIGH, "Reads another process's environment"),
+        Finding("harness.proc_environ", Severity.HIGH, "Reads another process's environment (Linux)"),
         re.compile(r"/proc/(?:\d+|self|\*)/environ", re.IGNORECASE),
     ),
     (
@@ -76,14 +82,27 @@ RISKY_PATTERNS: tuple[tuple[Finding, re.Pattern[str]], ...] = (
         re.compile(r"\b(?:unshare|nsenter)\b", re.IGNORECASE),
     ),
     (
+        Finding("harness.env_dump", Severity.MEDIUM, "Dumps the process environment"),
+        re.compile(
+            r"\bprintenv\b|Get-ChildItem\s+Env:|GetEnvironmentVariables\(", re.IGNORECASE
+        ),
+    ),
+    (
         Finding("network.proxy_bypass", Severity.MEDIUM, "Bypasses the proxy with curl --noproxy"),
         re.compile(r"--noproxy\b", re.IGNORECASE),
     ),
     (
         Finding("secrets.credential_file", Severity.HIGH, "Reads a credential file"),
         re.compile(
-            r"(?:~|\$HOME|/home/[^/\s\"']+|/Users/[^/\s\"']+|/root)/"
-            r"(?:\.netrc|\.git-credentials|\.docker/config\.json|\.aws/credentials|\.ssh/(?:id_|known_hosts|config))",
+            _HOME + r"[\\/]+(?:\.netrc|\.git-credentials|\.docker[\\/]+config\.json|\.aws[\\/]+credentials"
+            r"|\.ssh[\\/]+(?:id_|known_hosts|config))",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        Finding("secrets.windows_credential_store", Severity.HIGH, "Reads the Windows credential store"),
+        re.compile(
+            r"AppData[\\/]+(?:Roaming|Local)[\\/]+Microsoft[\\/]+(?:Credentials|Vault|Protect)|\bcmdkey\s+/list",
             re.IGNORECASE,
         ),
     ),
@@ -242,6 +261,29 @@ class ToolCallDecision:
             "provider": provider,
             "llm_model": llm_model,
         }
+
+
+def _argument_text(arguments: str) -> str:
+    """The string values of a JSON arguments object, decoded, so that escapes (a Windows path written as
+    C:\\\\Users) are matched as the shell will see them. Non-JSON arguments are returned as they are."""
+    try:
+        data = json.loads(arguments)
+    except ValueError:
+        return arguments
+    parts: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(data)
+    return "\n".join(parts) if parts else arguments
 
 
 def _field(obj: Any, key: str) -> Any:
@@ -423,10 +465,11 @@ class ToolGuard:
         findings: list[Finding] = []
         if call.name not in declared:
             findings.append(UNDECLARED_TOOL)
-        unseen = sorted(host for host in extract_hosts(call.arguments) if not self._known_host(host, context))
+        text = _argument_text(call.arguments)
+        unseen = sorted(host for host in extract_hosts(text) if not self._known_host(host, context))
         if unseen:
             findings.append(Finding(UNSEEN_HOST.id, UNSEEN_HOST.severity, f"{UNSEEN_HOST.title}: {', '.join(unseen)}"))
-        haystack = f"{call.name} {call.arguments}"
+        haystack = f"{call.name} {text}"
         # Also match a form with quotes, backslashes and $IFS removed, so `cat "/proc/1/environ"` is caught.
         normalized = _NORMALIZE_STRIP.sub("", haystack).replace("${IFS}", " ").replace("$IFS", " ")
         findings.extend(

@@ -81,3 +81,11 @@ class TestScrubPaths:
         run = self._trajectory(tmp_path)
         report = Scrubber(env_secrets=False).scrub_paths([run])
         assert report.hits and not (tmp_path / "out").exists()
+
+
+class TestWindowsHomeDirectories:
+    def test_windows_user_name_is_masked_in_text_and_json(self, tmp_path):
+        scrubber = Scrubber(env_secrets=False)
+        assert scrubber.scrub_text(r"cwd C:\Users\jane\Work\proj") == r"cwd C:\Users\<user>\Work\proj"
+        cleaned = scrubber.scrub_object({"cwd": r"C:\Users\jane\Work"})
+        assert cleaned == {"cwd": r"C:\Users\<user>\Work"}

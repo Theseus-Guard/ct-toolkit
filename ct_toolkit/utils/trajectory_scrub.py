@@ -27,7 +27,7 @@ SECRET_ENV_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.
 MIN_SECRET_LENGTH = 8
 
 EMAIL = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-HOME_DIR = re.compile(r"((?:/Users/|/home/))([^/\s\"']+)")
+HOME_DIR = re.compile(r"((?:/Users/|/home/)|[A-Za-z]:[\\/]+Users[\\/]+)([^\\/\s\"']+)")
 IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 
 CREDENTIAL_PATTERNS = [(re.compile(pattern, re.IGNORECASE), replacement) for pattern, replacement in SensitiveDataMasker.API_KEY_PATTERNS]
