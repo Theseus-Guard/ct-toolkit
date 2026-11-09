@@ -25,12 +25,13 @@ def mock_embedding():
         mock.return_value = 0.05
         yield mock
 
-def test_staged_approval_flow(mock_litellm, mock_embedding):
+def test_staged_approval_flow(mock_litellm, mock_embedding, tmp_path):
     """Verify that a staged endorsement enters cooldown and is promoted after expiration."""
     config = WrapperConfig(
         endorsement_cooldown_base=2, # Very short for testing
         endorsement_cooldown_max=5,
-        log_requests=True
+        log_requests=True,
+        vault_path=str(tmp_path / "ct_provenance.db"),
     )
     
     wrapper = TheseusWrapper(config=config)
@@ -63,11 +64,12 @@ def test_staged_approval_flow(mock_litellm, mock_embedding):
     commitment = next(c for c in wrapper.kernel.commitments if c.id == "harm_avoidance_level")
     assert commitment.current_value == "allow harmful content generation"
 
-def test_staged_approval_critical_failure(mock_litellm, mock_embedding):
+def test_staged_approval_critical_failure(mock_litellm, mock_embedding, tmp_path):
     """Verify that critical divergence in sandbox rejects the update."""
     config = WrapperConfig(
         endorsement_cooldown_base=10,
-        divergence_l3_threshold=0.5
+        divergence_l3_threshold=0.5,
+        vault_path=str(tmp_path / "ct_provenance.db"),
     )
     
     wrapper = TheseusWrapper(config=config)
