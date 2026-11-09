@@ -25,9 +25,9 @@ wrapper = TheseusWrapper(provider="openai")
 
 ## Methods
 
-### `chat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | Iterator[str]`
+### `chat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | Iterator[CTStreamChunk]`
 
-Send a message and receive an enriched response (or a token generator when `stream=True`).
+Send a message and receive an enriched response (or an iterator of `CTStreamChunk` objects when `stream=True`; `str(chunk)` is the text delta).
 
 ```python
 response = wrapper.chat(
@@ -42,7 +42,7 @@ for chunk in wrapper.chat("Explain your axioms.", stream=True):
     print(chunk, end="", flush=True)
 ```
 
-### `await achat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | AsyncIterator[str]`
+### `await achat(message, *, model, system, history, stream=False, **kwargs) → CTResponse | AsyncIterator[CTStreamChunk]`
 
 Asynchronous counterpart to `chat()`. Offloads synchronous provider SDK calls via `asyncio.to_thread` when native async clients aren't used, and runs `DivergenceEngine.aanalyze()` without blocking the event loop.
 
@@ -120,3 +120,21 @@ Generate cryptographically signed HTTP headers for sub-agent kernel & policy pro
 | `provenance_id`      | `str \| None`   | UUID of the log entry                                    |
 | `raw_response`       | `Any`           | Raw SDK response object                                  |
 | `sandbox_divergence` | `float \| None` | Divergence score of the shadow/sandbox agent (if staged) |
+| `tool_decisions`     | `list[ToolCallDecision]` | Tool-call guard verdict for each tool call in the response (empty when there are none or `tool_guard` is off) |
+
+### Tool-call decisions
+
+`tool_decisions` lists one `ToolCallDecision` per tool call, in the order the model gave them. Each has `index`, `call` (`id`, `name`, `arguments`), `findings`, `verdict` (`passed`, `flagged` or `blocked`), `mode` and `judge`. In `enforce` mode, `raw_response` already lacks the blocked calls.
+
+```python
+from ct_toolkit import TheseusWrapper, WrapperConfig
+
+wrapper = TheseusWrapper(provider="openai", config=WrapperConfig(tool_guard_mode="enforce"))
+# tools: the OpenAI-style tool list the request declares
+response = wrapper.chat("Summarise the report.", model="gpt-4o-mini", tools=tools)
+
+for decision in response.tool_decisions:
+    print(decision.call.name, decision.verdict, [str(f) for f in decision.findings])
+```
+
+In streaming mode, the final `CTStreamChunk` (`is_final=True`) carries the same list in its `tool_decisions` field. Earlier chunks have an empty list. See [Tool-Call Guard](../concepts/tool-call-guard.md).

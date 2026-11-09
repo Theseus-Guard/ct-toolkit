@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ct-bedrock/global.openai.gpt-6-luna",
+  "provider": {
+    "ct-bedrock": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AWS Bedrock via CT-Toolkit",
+      "options": {
+        "baseURL": "http://127.0.0.1:8788/v1",
+        "apiKey": "<paste the value of .litellm_master_key>"
+      },
+      "models": {
+        "global.openai.gpt-6-luna": {
+          "name": "GPT-6 Luna (Bedrock, guarded)",
+          "tool_call": true
+        }
+      }
+    }
+  }
+}

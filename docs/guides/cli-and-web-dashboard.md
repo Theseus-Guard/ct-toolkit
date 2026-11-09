@@ -8,11 +8,15 @@ CT Toolkit provides both a **Rich Terminal CLI** and a self-hosted **Interactive
 
 ## Prerequisites
 
-Install the CLI and Server extras:
+The CLI and the web dashboard are part of the core install:
 
 ```bash
-pip install "ct-toolkit[cli,server]"
-# Or install all optional features (including PostgreSQL & OpenTelemetry):
+pip install ct-toolkit
+```
+
+For PostgreSQL vaults, OpenTelemetry and the other optional features:
+
+```bash
 pip install "ct-toolkit[all]"
 ```
 
@@ -54,11 +58,20 @@ Then open **`http://127.0.0.1:8001/dashboard`** in your browser.
 - **Real-Time Auto-Refresh**: Automatically polls `/api/dashboard/status` every 5 seconds (can be toggled on/off or manually refreshed).
 - **KPI Telemetry Cards**: Live cryptographic chain verification badge, active entry counter, average/max divergence score with visual meter, and staged cooldown counter.
 - **Visual Tier Breakdown**: Stacked bar chart and proportional breakdown of `OK`, `L1_WARNING`, `L2_JUDGE`, and `L3_ICM` events.
-- **Interactive Log Explorer**: Filter provenance entries by divergence tier (`All`, `OK`, `L1`, `L2`, `L3`) and click any row to inspect the full request/response SHA-256 hashes, previous entry hash, and JSON metadata.
+- **Immutable Provenance Chain Ledger**: Every entry of the chain that passes through CT-Toolkit, of every kind: divergence samples, tool-call decisions (`tool_call`), model turns (`model_turn`) and other API calls (`api_call`). It has a kind filter, a search over the entry's metadata (endpoint, model, tool), sorting by time, kind or divergence score, and pagination. It is backed by `GET /api/dashboard/ledger` (parameters `page`, `page_size`, `sort`, `order`, `kind` and `q`). Only the hashes of the request and response text are stored, so the ledger shows what happened and when, not the text itself.
+- **Integrity**: Chain verification runs in a background thread, not on each request. Entries added since the last check are verified every 5 seconds; the whole chain is verified every `--full-verify-interval` seconds (default `300`, env `CT_FULL_VERIFY_INTERVAL`). An edit to an old entry therefore appears within that interval. Dashboard responses are cached per write, for at most 30 seconds. See [Performance & Scaling](../../website/docs/guides/performance.md) for the measured costs.
+- **Staged Kernel Rules**: The same paging, sorting and filtering as the ledger, by sandbox status (`READY_FOR_PROMOTION`, `ACTIVE_COOLDOWN`, `PROMOTED`), with a search over the rule text and commitment. It is backed by `GET /api/dashboard/staged-rules`.
+- **Tool calls section**: Stat tiles and a chart of the tool-call guard verdicts (`passed`, `flagged`, `blocked`), and a table of the decisions with filters, sorting and pagination. It is backed by `GET /api/dashboard/tool-calls` (parameters `page`, `page_size`, `sort`, `order`, `verdict`, `tool` and `q`). Arguments are not in the audit trail, so the table cannot show them.
 
 ---
 
-## 3. Security Architecture (Localhost-Only by Default)
+## 3. Tool-Call Review (`ct-toolkit tool-guard`, `proxy`, `scrub`)
+
+The **tool-call guard** reviews the tool calls a model asks the harness to run. `ct-toolkit tool-guard check FILE` reviews a saved response JSON without a model and exits with code `1` on a high-severity finding, which suits a CI gate. `ct-toolkit tool-guard list`, `stats` and `show` read the decisions recorded in a vault, with filters, sorting and paging for the list. `ct-toolkit proxy --upstream URL --tool-guard-mode enforce` runs a loopback-only proxy: point the harness's base URL at it and risky calls are removed before the harness sees them. `ct-toolkit scrub PATH... --out DIR` redacts credentials, emails, home directory names and public IPs from trajectory files; without `--out` it is a dry run. See [Tool-Call Guard](https://theseus-guard.github.io/ct-toolkit/concepts/tool-call-guard/) for the checks and limits.
+
+---
+
+## 4. Security Architecture (Localhost-Only by Default)
 
 The Web UI and sidecar server (`ct-toolkit serve`) are designed to **fail closed**:
 
@@ -75,7 +88,7 @@ The Web UI and sidecar server (`ct-toolkit serve`) are designed to **fail closed
 
 ---
 
-## 4. Standalone Endpoint Auditor (`ct-toolkit audit`)
+## 5. Standalone Endpoint Auditor (`ct-toolkit audit`)
 
 Stress-test any OpenAI-compatible or local Ollama endpoint against the L3 Identity Consistency Metric (ICM) probe battery without writing code:
 
@@ -86,7 +99,7 @@ ct-toolkit audit --url http://localhost:11434/v1 --model llama3 --kernel defense
 
 ---
 
-## 5. Sidecar Guardrail Server (`ct-toolkit serve`)
+## 6. Sidecar Guardrail Server (`ct-toolkit serve`)
 
 Run CT Toolkit as a standalone microservice exposing both `/v1/analyze` (for polyglot services) and `/dashboard`:
 

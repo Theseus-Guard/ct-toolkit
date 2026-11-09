@@ -58,3 +58,11 @@ plans/
 
 # Runtime-generated capability cache (rewritten by tests and startup)
 config/llm_capability.yaml
+
+# SQLite in-memory artefact written when a vault path is ":memory:"
+:memory:
+examples/opencode-bedrock/logs/
+examples/opencode-bedrock/.litellm_master_key
+examples/opencode-bedrock/tool_guard_settings.json
+docs/architecture.md
+docs/WHY.md

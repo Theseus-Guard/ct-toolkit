@@ -1,12 +1,14 @@
-name: Release & Publish on Tag
+name: Release & Publish
 
 on:
   push:
+    branches:
+      - main # Publishes the version in pyproject.toml when its tag does not exist yet
     tags:
-      - "v*.*.*" # Trigger on version tags like v1.2.3
+      - "v*.*.*" # Or publishes a version tag pushed by hand
 
 permissions:
-  contents: write # Needed to create a GitHub Release
+  contents: write # Needed to create the GitHub Release and its tag
   id-token: write # Needed for PyPI trusted publishing
 
 jobs:
@@ -16,61 +18,89 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          version: "latest"
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Run tests
-        run: uv run pytest --cov --cov-branch --cov-report=xml
-
-      - name: Build package
-        run: uv build
-
-      - name: Validate tag matches package version
+      - name: Work out the version and whether this run publishes it
+        id: decide
+        shell: bash
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PKG_VERSION=$(python - <<'PY'
+          VERSION=$(python3 - <<'PY'
           import tomllib
           with open("pyproject.toml", "rb") as f:
               print(tomllib.load(f)["project"]["version"])
           PY
           )
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "Tag version (v$TAG_VERSION) does not match pyproject.toml version ($PKG_VERSION)"
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag $TAG is new; publishing it."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.decide.outputs.publish == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        if: steps.decide.outputs.publish == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        if: steps.decide.outputs.publish == 'true'
+        run: uv sync --all-extras --dev
+
+      - name: Run tests
+        if: steps.decide.outputs.publish == 'true'
+        run: uv run pytest --cov --cov-branch --cov-report=xml
+
+      - name: Build package
+        if: steps.decide.outputs.publish == 'true'
+        run: uv build
+
+      - name: Validate tag matches package version
+        if: steps.decide.outputs.publish == 'true' && github.ref_type == 'tag'
+        run: |
+          if [ "$GITHUB_REF_NAME" != "${{ steps.decide.outputs.tag }}" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pyproject.toml version ${{ steps.decide.outputs.version }}"
             exit 1
           fi
 
       - name: Publish to PyPI
+        if: steps.decide.outputs.publish == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
-      
+
       - name: Publish to GitHub Release
+        if: steps.decide.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.decide.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/*
           generate_release_notes: true
 
       - name: Update GitHub Release notes from CHANGELOG
+        if: steps.decide.outputs.publish == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           NOTES=$(awk -v h="## [$VERSION]" 'index($0, h) == 1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md)
           if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
             echo "No CHANGELOG section for $VERSION; keeping generated release notes"
             exit 0
           fi
-          EXISTING=$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body')
+          EXISTING=$(gh release view "$TAG" --json body --jq '.body')
           printf '%s\n\n%s\n' "$NOTES" "$EXISTING" > "$RUNNER_TEMP/release-notes.md"
-          gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"

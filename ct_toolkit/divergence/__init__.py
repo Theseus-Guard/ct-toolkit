@@ -24,8 +24,20 @@ from ct_toolkit.divergence.l3_icm import (
     ICM_TIMEOUT_SECONDS,
     ICM_MAX_RETRIES,
 )
-from ct_toolkit.divergence.loss import DivergencePenaltyLoss, compute_alignment_loss
 from ct_toolkit.divergence.scheduler import RiskProfile, ElasticityScheduler
+
+# DivergencePenaltyLoss and compute_alignment_loss need torch, an optional dependency (the `ml` extra).
+# They are imported on first use, so the core package installs and imports without torch.
+_TORCH_LOSS_NAMES = ("DivergencePenaltyLoss", "compute_alignment_loss")
+
+
+def __getattr__(name: str):
+    if name in _TORCH_LOSS_NAMES:
+        from ct_toolkit.divergence import loss
+
+        return getattr(loss, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Engine

@@ -8,7 +8,77 @@
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://theseus-guard.github.io/ct-toolkit/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit)
 
-CT Toolkit is an open-source security layer designed to preserve the **identity continuity** of AI agents over time. It implements the **Nested Agentic Architecture (NAA)** framework to prevent **Sequential Self-Compression (SSC)** in multi-agent hierarchies.
+CT Toolkit is an open-source security layer that keeps AI agents aligned with their original constitution over time. It watches what your agents say and do, reviews the tool calls they ask for, and records everything in a tamper-evident provenance chain you can inspect in a web dashboard.
+
+![CT Toolkit Web Audit & Telemetry Dashboard](docs/ct_toolkit_web_dashboard.png)
+
+---
+
+## Quick Start
+
+```bash
+# Core install: the library, the ct-toolkit CLI, the web dashboard and the tool-call guard
+pip install ct-toolkit
+
+# Optional extras: ml (torch, fastembed), postgres, observability, structured, vision, all
+pip install "ct-toolkit[all]"
+```
+
+Wrap your model client in one line:
+
+```python
+from ct_toolkit import TheseusWrapper, WrapperConfig
+
+# Protect against silent provider context compression
+config = WrapperConfig(compression_passive_detection=True)
+
+# One-line injection for any LLM provider
+client = TheseusWrapper(provider="openai", config=config)
+
+# Sync or async (`await client.achat(...)`) with automatic drift analysis
+response = client.chat("What are your core security axioms?")
+
+print(response.content)
+print(f"Divergence Score: {response.divergence_score}")
+```
+
+Open the dashboard on the provenance vault your wrapper writes to:
+
+```bash
+ct-toolkit dashboard --web --vault ./ct_provenance.db --port 8001
+# then open http://127.0.0.1:8001/dashboard
+```
+
+To put the tool-call guard in front of a coding agent, run the local proxy and point the agent's base URL at it. The [OpenCode with AWS Bedrock guide](https://theseus-guard.github.io/ct-toolkit/guides/opencode-bedrock/) shows the full setup.
+
+```bash
+ct-toolkit proxy --upstream https://api.openai.com --port 8788 --tool-guard-mode observe
+```
+
+---
+
+## Why CT Toolkit?
+
+In complex agentic workflows, LLMs tend to "drift" from their original instructions. CT Toolkit provides the mathematical and cryptographic guardrails to ensure your agents remain aligned with their core constitution, even across deep hierarchies.
+
+- **Tool-Call Guard**: Reviews the tool calls an agent asks for before the harness runs them: undeclared tools, hosts the conversation never mentions, and risky commands or credential reads. Runs without a second model; `observe` records findings, `enforce` removes high-severity calls. Available as a library wrapper, a local proxy (`ct-toolkit proxy`) and the guardrail server.
+- **Provenance Ledger of All Traffic**: Every request that passes through the proxy is recorded: model turns, other API calls and each tool-call decision. Text is stored as hashes only, and the chain is HMAC-signed, so you can audit what went through CT Toolkit and verify that no entry was changed.
+- **Contrastive Semantic L1 Engine**: Provider-independent embeddings (`litellm`, `ollama`, local `fastembed`) with positive/negative anchor analysis and semantic rule conflict detection. Divergence is graded into L1, L2 and L3 tiers.
+- **Staged Approval (Cooldown)**: Verify risky kernel updates in a sandbox via shadow requests before production promotion.
+- **Async & Streaming Guardrails (`achat`)**: Native `async/await` and streaming (`stream=True`) support with non-blocking background execution for shadow requests and L3 ICM probes.
+- **Passive Context Compression Detection**: Automatically detects silent provider-side history compression (e.g., OpenAI/Anthropic).
+- **Constitutional Kernels & Distributed Propagation**: Axiomatic identity anchors with HMAC-SHA256 signed HTTP header propagation (`propagate_headers` / `from_headers`).
+- **Standalone Auditor & Status CLI**: Rapidly audit any LLM endpoint (`ct-toolkit audit`) and inspect provenance integrity & divergence tiers (`ct-toolkit status` / `dashboard`).
+- **Autonomous Self-Correction**: Active L2->L1 feedback loop that retries and corrects divergent responses before they reach the user.
+- **Enterprise Provenance & Observability**: Immutable HMAC-signed hash chain supporting SQLite and PostgreSQL/SQLAlchemy with paginated verification and OpenTelemetry (OTel) spans/metrics.
+
+---
+
+## CLI & Web Dashboard
+
+Audit any LLM endpoint (OpenAI, Ollama, LM Studio) and inspect your provenance chain directly from your terminal or in the interactive Web Audit Dashboard. The dashboard shows the divergence timeline and tier breakdown, the staged kernel rules, the provenance ledger and the tool-call guard decisions, with paging, sorting and filtering on each table.
+
+Example output of `ct-toolkit status`:
 
 ```text
 $ ct-toolkit status
@@ -20,7 +90,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.4.4
+  Computational Theseus Toolkit (CT Toolkit) v0.5.0
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
@@ -51,65 +121,7 @@ $ ct-toolkit status
 └────────────────┴──────────────────┴────────────────────┴─────────────────────┘
 ```
 
----
-
-## 📖 Official Documentation
-
-For full API reference, architecture details, examples, and integration guides, visit our documentation site:
-👉 [**https://theseus-guard.github.io/ct-toolkit/**](https://theseus-guard.github.io/ct-toolkit/)
-
-- [**Live Examples & Case Studies**](https://theseus-guard.github.io/ct-toolkit/examples/): Real-world scenarios like Financial Auditor Integrity.
-- [**FastAPI Integration Test Project**](https://github.com/hakandamar/ct-toolkit-fastapi): Reference FastAPI app for validating CT Toolkit end-to-end across L1/L2/L3 guardrails and provenance logs with local model infrastructure.
-- [**Deep Agents Integration Test Project**](https://github.com/hakandamar/ct-toolkit-deep-agents): Reference Deep Agents app for validating CT Toolkit end-to-end with hierarchical agent workflows, L1/L2/L3 guardrails, and provenance logs.
-
----
-
-## Why CT Toolkit?
-
-In complex agentic workflows, LLMs tend to "drift" from their original instructions. CT Toolkit provides the mathematical and cryptographic guardrails to ensure your agents remain aligned with their core constitution, even across deep hierarchies.
-
-- **Async & Streaming Guardrails (`achat`)**: Native `async/await` and streaming (`stream=True`) support with non-blocking background execution for shadow requests and L3 ICM probes.
-- **Contrastive Semantic L1 Engine**: Provider-independent embeddings (`litellm`, `ollama`, local `fastembed`) with positive/negative anchor analysis and semantic rule conflict detection.
-- **Staged Approval (Cooldown)**: Verify risky kernel updates in a sandbox via shadow requests before production promotion.
-- **Passive Context Compression Detection**: Automatically detects silent provider-side history compression (e.g., OpenAI/Anthropic).
-- **Constitutional Kernels & Distributed Propagation**: Axiomatic identity anchors with HMAC-SHA256 signed HTTP header propagation (`propagate_headers` / `from_headers`).
-- **Standalone Auditor & Status CLI**: Rapidly audit any LLM endpoint (`ct-toolkit audit`) and inspect provenance integrity & divergence tiers (`ct-toolkit status` / `dashboard`).
-- **Autonomous Self-Correction**: Active L2->L1 feedback loop that retries and corrects divergent responses before they reach the user.
-- **Enterprise Provenance & Observability**: Immutable HMAC-signed hash chain supporting SQLite and PostgreSQL/SQLAlchemy with paginated verification and OpenTelemetry (OTel) spans/metrics.
-
-![CT Toolkit Web Audit & Telemetry Dashboard](docs/ct_toolkit_web_dashboard.png)
-
----
-
-## Quick Start
-
-```bash
-# Core lightweight install
-pip install ct-toolkit
-
-# Or install with optional extras (cli, server, enterprise, embeddings, observability, all)
-pip install "ct-toolkit[all]"
-```
-
-```python
-from ct_toolkit import TheseusWrapper, WrapperConfig
-
-# Protect against silent provider context compression
-config = WrapperConfig(compression_passive_detection=True)
-
-# One-line injection for any LLM provider
-client = TheseusWrapper(provider="openai", config=config)
-
-# Sync or async (`await client.achat(...)`) with automatic drift analysis
-response = client.chat("What are your core security axioms?")
-
-print(response.content)
-print(f"Divergence Score: {response.divergence_score}")
-```
-
-### 🔍 Standalone Auditor & Dashboard (CLI & Web UI)
-
-Audit any LLM endpoint (OpenAI, Ollama, LM Studio) and inspect your provenance chain directly from your terminal or in the interactive Web Audit Dashboard:
+Common commands:
 
 ```bash
 # View Provenance Chain integrity, L1/L2/L3 tier breakdown, and staged rules in terminal
@@ -121,6 +133,19 @@ ct-toolkit dashboard --web --vault ./ct_provenance.db --port 8001
 # Audit a local Ollama model
 ct-toolkit audit --url http://localhost:11434/v1 --kernel defense
 
+# Review the tool calls in a saved model response (exit code 1 on a high-severity finding)
+ct-toolkit tool-guard check ./response.json --mode enforce
+
+# Run a local tool-call proxy that removes risky calls; point the harness's base URL at http://127.0.0.1:8788
+ct-toolkit proxy --upstream https://api.openai.com --port 8788 --tool-guard-mode enforce
+
+# List, count and inspect tool-call decisions in the provenance vault
+ct-toolkit tool-guard list --vault ./ct_provenance.db --verdict blocked
+ct-toolkit tool-guard stats --vault ./ct_provenance.db
+
+# Redact credentials, emails, home directories and public IPs from a trajectory (dry run without --out)
+ct-toolkit scrub ./trajectories --out ./trajectories_clean
+
 # List available kernels and templates
 ct-toolkit list-kernels
 ct-toolkit list-templates
@@ -128,10 +153,6 @@ ct-toolkit list-templates
 # Download a verified profile from the official repository
 ct-toolkit setup personal_kernel --dest ./config
 ```
-
-If you want a runnable application example instead of a CLI-only flow, see [**ct-toolkit-fastapi**](https://github.com/hakandamar/ct-toolkit-fastapi), a small FastAPI validation project that developers can use to test CT Toolkit locally with automated endpoints and pytest coverage.
-
-For Deep Agents workflows, see [**ct-toolkit-deep-agents**](https://github.com/hakandamar/ct-toolkit-deep-agents), a reference integration project for validating CT Toolkit in multi-agent orchestration scenarios.
 
 ### Security Hardening
 
@@ -141,13 +162,29 @@ The L2 judge does not evaluate Jinja2 expressions in user requests or model resp
 
 ---
 
+## 📖 Documentation & Examples
+
+For full API reference, architecture details, examples, and integration guides, visit our documentation site:
+👉 [**https://theseus-guard.github.io/ct-toolkit/**](https://theseus-guard.github.io/ct-toolkit/)
+
+- [**Live Examples & Case Studies**](https://theseus-guard.github.io/ct-toolkit/examples/): Real-world scenarios like Financial Auditor Integrity.
+- [**OpenCode with AWS Bedrock**](https://theseus-guard.github.io/ct-toolkit/guides/opencode-bedrock/): Route a coding agent through the tool-call guard and the provenance ledger.
+- [**FastAPI Integration Test Project**](https://github.com/hakandamar/ct-toolkit-fastapi): Reference FastAPI app for validating CT Toolkit end-to-end across L1/L2/L3 guardrails and provenance logs with local model infrastructure.
+- [**Deep Agents Integration Test Project**](https://github.com/hakandamar/ct-toolkit-deep-agents): Reference Deep Agents app for validating CT Toolkit end-to-end with hierarchical agent workflows, L1/L2/L3 guardrails, and provenance logs.
+
+If you want a runnable application example instead of a CLI-only flow, see [**ct-toolkit-fastapi**](https://github.com/hakandamar/ct-toolkit-fastapi), a small FastAPI validation project that developers can use to test CT Toolkit locally with automated endpoints and pytest coverage.
+
+For Deep Agents workflows, see [**ct-toolkit-deep-agents**](https://github.com/hakandamar/ct-toolkit-deep-agents), a reference integration project for validating CT Toolkit in multi-agent orchestration scenarios.
+
+---
+
 ## 🚦 Project Health & Status
 
 | Metric           | Status                                                                                                                                                                                                              |
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Tests**        | ✅ 426 passed, 3 skipped (100% success rate, 90%+ coverage)                                                                                                                                                         |
+| **Tests**        | ✅ 617 passed, 13 skipped                                                                                                                                                                                           |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
-| **Last Phase**   | ✅ v0.4.4: pyasn1 0.6.5 security fixes (ASN.1 BER/CER/DER quadratic CPU/DoS, Dependabot #123-126)                                                                              |
+| **Last Phase**   | ✅ v0.5.0: provenance ledger of all proxied traffic, graded divergence scoring, paged dashboard tables                                                                              |
 
 ### Framework & Model Support
 

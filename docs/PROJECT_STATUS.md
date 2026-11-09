@@ -8,7 +8,7 @@
 
 CT Toolkit is an open-source Python library that brings the **Nested Agentic Architecture (NAA)** framework — proposed in Hakan Damar's _"The Computational Theseus: Engineering Identity Continuity as a Guardrail Against Sequential Self-Compression in Multi-Agent AGI Systems"_ (2026 - 2nd edition) — into engineering practice.
 
-**Current Version:** `v0.4.4`
+**Current Version:** `v0.5.0`
 
 ### The Problem It Solves
 
@@ -22,7 +22,7 @@ CT Toolkit addresses this by treating **identity continuity as a first-class sys
 
 | Area                                   | Status                                                                                                                                                                                                                                               |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Python library (pip install)           | ✅ Complete (Modular optional extras: `cli`, `server`, `enterprise`, `embeddings`, `observability`, `all`)                                                                                                                                           |
+| Python library (pip install)           | ✅ Complete. The core install includes the `ct-toolkit` CLI, the web dashboard and the tool-call guard. Optional extras: `postgres`, `observability`, `embeddings`, `ml`, `structured`, `vision`, `ollama`, `langchain`, `autogen`, and `all` (everything except `ml` and `autogen`). |
 | OpenAI / Anthropic / Ollama support    | ✅ Complete (`chat` & async `achat` + `stream=True` guardrails)                                                                                                                                                                                      |
 | Constitutional Kernel                  | ✅ Complete (Lexical + Contrastive Semantic conflict detection)                                                                                                                                                                                      |
 | Reflective Endorsement                 | ✅ Complete                                                                                                                                                                                                                                          |

@@ -53,6 +53,13 @@ DEFAULT_NEGATIVE_ANCHORS: list[str] = [
     "leak classified",
 ]
 
+# Violation scoring: divergence = _VIOLATION_FLOOR + _VIOLATION_SPAN * severity, severity in (0, 1].
+# With the default thresholds (L1 0.15, L2 0.30, L3 0.50) this gives 0.27 for one weak anchor, 0.43 for two, 0.60 for three.
+_VIOLATION_FLOOR = 0.10
+_VIOLATION_SPAN = 0.50
+# Share of the cosine distance added for neural embeddings, so the score is graded inside each band.
+_NEURAL_DISTANCE_WEIGHT = 0.20
+
 # Synonym groups for semantic concept normalization in local L1 scoring
 _ANCHOR_SYNONYM_MAP: dict[str, str] = {
     "disable": "disable",
@@ -245,13 +252,14 @@ class IdentityEmbeddingLayer:
         similarity = self._cosine_similarity(self._reference_vector, candidate_vector)
         violation_score = self._compute_violation_score(text)
 
-        # 1. If explicit or paraphrased violation anchors are present, score reflects violation severity
-        #    combined with cosine distance when neural embeddings (api / fastembed) are active.
+        # 1. If explicit or paraphrased violation anchors are present, the score grows with the number of anchors
+        #    matched: one weak match lands in the L1 band, two in the L2 band, three or more in the L3 band.
+        #    Neural embeddings (api / fastembed) add a share of the cosine distance on top.
         if violation_score > 0.0:
-            base_violation = 0.35 + 0.60 * violation_score
+            base_violation = _VIOLATION_FLOOR + _VIOLATION_SPAN * violation_score
             if self._embedding_method in ("api", "fastembed"):
-                raw_divergence = max(0.0, min(1.0, 1.0 - similarity))
-                divergence = min(1.0, max(raw_divergence, base_violation))
+                raw_distance = max(0.0, min(1.0, 1.0 - similarity))
+                divergence = min(1.0, base_violation + _NEURAL_DISTANCE_WEIGHT * raw_distance)
             else:
                 divergence = min(1.0, base_violation)
             return round(float(divergence), 6)
@@ -298,7 +306,7 @@ class IdentityEmbeddingLayer:
 
         if matches == 0:
             return 0.0
-        return min(1.0, matches / 3.0)
+        return min(1.0, matches / 6.0)
 
     def update_reference(self, new_text: str) -> None:
         """

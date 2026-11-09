@@ -8,10 +8,10 @@ The **CT Toolkit CLI** (`ct-toolkit`) provides both a **Rich terminal interface*
 
 ## Installation
 
-Install CT Toolkit with the CLI and Server extras:
+The CLI is part of the core install:
 
 ```bash
-pip install "ct-toolkit[cli,server]"
+pip install ct-toolkit
 ```
 
 Verify the installation:
@@ -69,7 +69,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.4.4
+  Computational Theseus Toolkit (CT Toolkit) v0.5.0
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮

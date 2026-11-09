@@ -131,6 +131,7 @@ nav:
       - Divergence Engine: concepts/divergence.md
       - Tiered Guardrails (L1/L2/L3): concepts/tiered-guardrails.md
       - Multi-Agent Hierarchy: concepts/multi-agent.md
+      - Tool-Call Guard: concepts/tool-call-guard.md
       - Provenance & Compliance: concepts/provenance.md
       - Reflective Endorsement: concepts/reflective-endorsement.md
 
@@ -148,6 +149,8 @@ nav:
       - CLI Auditor: guides/cli-auditor.md
       - Passive Compression Guard: guides/passive-compression.md
       - Advanced Setup: guides/enterprise.md
+      - Performance & Scaling: guides/performance.md
+      - OpenCode with AWS Bedrock: guides/opencode-bedrock.md
       - Fine-Tuning with CIK: guides/fine-tuning.md
       - EU AI Act Compliance: guides/compliance.md
 

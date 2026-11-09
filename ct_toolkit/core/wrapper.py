@@ -41,6 +41,19 @@ from ct_toolkit.core.exceptions import (
     CriticalSandboxDivergenceError
 )
 from ct_toolkit.core.integrity import IntegrityMonitor
+from ct_toolkit.core.tool_guard import (
+    DEFAULT_ALLOWED_HOSTS,
+    ToolCallDecision,
+    ToolCallJudge,
+    ToolGuard,
+    StreamedToolCalls,
+    ToolGuardMode,
+    chunk_has_tool_calls,
+    conversation_text,
+    task_text,
+    without_calls,
+    without_stream_calls,
+)
 from ct_toolkit.divergence.scheduler import RiskProfile
 from ct_toolkit.core.compression_guard import ContextCompressionGuard
 from ct_toolkit.endorsement.reflective import (
@@ -114,6 +127,15 @@ class WrapperConfig:
     circuit_breaker_on_critical: bool = True
     circuit_breaker_recovery_timeout: float = 300.0
 
+    # -- Tool-call guard --
+    tool_guard: bool = True
+    tool_guard_mode: ToolGuardMode = ToolGuardMode.OBSERVE  # "enforce" removes high-severity calls
+    tool_guard_allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
+    # LiteLLM model that judges suspicious calls. None leaves them to the scanner alone.
+    tool_guard_judge_model: str | None = None
+    tool_guard_judge_api_base: str | None = None
+    tool_guard_judge_fail_closed: bool = False  # block suspicious calls when the judge gives no verdict
+
     # -- Telemetry / OpenTelemetry --
     enable_telemetry: bool = True
     telemetry_metric_callback: Callable[[str, float, dict[str, Any]], None] | None = None
@@ -131,6 +153,8 @@ class CTResponse:
     raw_response: Any = field(default=None, repr=False)
     # Sandbox metadata if staged updates are active
     sandbox_divergence: float | None = None
+    # Tool-call guard verdicts; `raw_response` already lacks the blocked calls in enforce mode
+    tool_decisions: list[ToolCallDecision] = field(default_factory=list, repr=False)
 
     def __str__(self) -> str:
         return self.content
@@ -149,9 +173,41 @@ class CTStreamChunk:
     provenance_id: str | None = None
     sandbox_divergence: float | None = None
     raw_chunk: Any = field(default=None, repr=False)
+    # Set on the final chunk: the tool-call guard verdicts for the whole stream
+    tool_decisions: list[ToolCallDecision] = field(default_factory=list, repr=False)
 
     def __str__(self) -> str:
         return self.delta
+
+
+class _StreamToolReview:
+    """Follows the tool calls of one stream. In enforce mode the chunks from the first tool-call chunk on are
+    held until the review at the end, then released without the blocked calls. In observe mode nothing waits."""
+
+    def __init__(self, enforce: bool) -> None:
+        self.enforce = enforce
+        self.calls = StreamedToolCalls()
+        self._held: list[CTStreamChunk] = []
+        self._holding = False
+
+    def offer(self, chunk: CTStreamChunk) -> bool:
+        """Whether the chunk may be yielded now."""
+        self.calls.add_chunk(chunk.raw_chunk)
+        if self.enforce and (self._holding or chunk_has_tool_calls(chunk.raw_chunk)):
+            self._holding = True
+            self._held.append(chunk)
+            return False
+        return True
+
+    def release(self, decisions: list[ToolCallDecision]) -> list[CTStreamChunk]:
+        blocked = {decision.index for decision in decisions if decision.blocked}
+        if blocked:
+            keys = self.calls.keys_at(blocked)
+            calls_left = len(decisions) - len(blocked)
+            for chunk in self._held:
+                chunk.raw_chunk = without_stream_calls(chunk.raw_chunk, keys, calls_left)
+        released, self._held = self._held, []
+        return released
 
 
 class TheseusWrapper:
@@ -267,6 +323,15 @@ class TheseusWrapper:
         )
 
         self._provenance_log = self._init_provenance_log()
+        judge = None
+        if self._config.tool_guard_judge_model:
+            judge = ToolCallJudge(self._config.tool_guard_judge_model, api_base=self._config.tool_guard_judge_api_base)
+        self._tool_guard = ToolGuard(
+            self._config.tool_guard_mode,
+            self._config.tool_guard_allowed_hosts,
+            judge=judge,
+            judge_fail_closed=self._config.tool_guard_judge_fail_closed,
+        )
         self._identity_layer = self._init_identity_layer()
         self._divergence_engine = self._init_divergence_engine()
         self._last_model: str = "unknown"
@@ -998,6 +1063,56 @@ class TheseusWrapper:
 
     # ── Main Chat Interface ─────────────────────────────────────────────────────
 
+    def _stream_enforces(self) -> bool:
+        return self._config.tool_guard and ToolGuardMode(self._config.tool_guard_mode) is ToolGuardMode.ENFORCE
+
+    def _review_streamed_tool_calls(
+        self,
+        review: _StreamToolReview,
+        message: str,
+        history: list[dict[str, str]] | None,
+        system: str | None,
+        model: str,
+        kwargs: dict[str, Any],
+    ) -> list[ToolCallDecision]:
+        response = review.calls.response()
+        if not response["choices"][0]["message"]["tool_calls"]:
+            return []
+        _, decisions = self._review_tool_calls(response, message, history, system, model, kwargs)
+        return decisions
+
+    def _review_tool_calls(
+        self,
+        raw_response: Any,
+        message: str,
+        history: list[dict[str, str]] | None,
+        system: str | None,
+        model: str,
+        kwargs: dict[str, Any],
+    ) -> tuple[Any, list[ToolCallDecision]]:
+        """Reviews the tool calls of a response and records each verdict in the provenance chain.
+        In enforce mode, returns a copy of the response without the blocked calls."""
+        if not self._config.tool_guard:
+            return raw_response, []
+        decisions = self._tool_guard.review(
+            raw_response,
+            tools=kwargs.get("tools"),
+            conversation=conversation_text(message, history, system),
+            task=task_text(message, history),
+        )
+        if self._config.log_requests:
+            for decision in decisions:
+                self._provenance_log.record(
+                    request_text=message,
+                    response_text=f"{decision.call.name}({decision.call.arguments})",
+                    metadata=decision.audit_metadata(self._provider, model),
+                )
+        blocked = {decision.index for decision in decisions if decision.blocked}
+        if blocked:
+            logger.warning(f"Tool guard blocked {len(blocked)} call(s) to {model}")
+            raw_response = without_calls(raw_response, blocked)
+        return raw_response, decisions
+
     def chat(
         self,
         message: str,
@@ -1082,6 +1197,10 @@ class TheseusWrapper:
                 
             break
 
+        raw_response, tool_decisions = self._review_tool_calls(
+            raw_response, message, history, system, model_used, kwargs
+        )
+
         # --- Staged Approval Monitoring (Shadow Requests) ---
         sandbox_divergence = None
         if self._staged_manager.has_active_staged():
@@ -1118,6 +1237,7 @@ class TheseusWrapper:
             provenance_id=provenance_id,
             raw_response=raw_response,
             sandbox_divergence=sandbox_divergence,
+            tool_decisions=tool_decisions,
         )
 
     async def achat(
@@ -1201,6 +1321,11 @@ class TheseusWrapper:
 
             break
 
+        # The judge call is synchronous: run the review off the event loop.
+        raw_response, tool_decisions = await asyncio.to_thread(
+            self._review_tool_calls, raw_response, message, history, system, model_used, kwargs
+        )
+
         sandbox_divergence = None
         if self._staged_manager.has_active_staged():
             if self._config.shadow_background:
@@ -1236,6 +1361,7 @@ class TheseusWrapper:
             provenance_id=provenance_id,
             raw_response=raw_response,
             sandbox_divergence=sandbox_divergence,
+            tool_decisions=tool_decisions,
         )
 
     def stream_chat(
@@ -1274,6 +1400,7 @@ class TheseusWrapper:
         accumulated_parts: list[str] = []
         model_used = model or self._default_model_for_provider(self._provider) or "unknown"
 
+        review = _StreamToolReview(self._stream_enforces())
         for raw_chunk in raw_stream:
             chunk_model = self._extract_model(raw_chunk, None)
             if chunk_model and chunk_model != "unknown":
@@ -1282,7 +1409,7 @@ class TheseusWrapper:
             if delta:
                 accumulated_parts.append(delta)
             accumulated = "".join(accumulated_parts)
-            yield CTStreamChunk(
+            chunk_out = CTStreamChunk(
                 delta=delta,
                 accumulated_content=accumulated,
                 provider=self._provider,
@@ -1290,7 +1417,12 @@ class TheseusWrapper:
                 is_final=False,
                 raw_chunk=raw_chunk,
             )
+            if review.offer(chunk_out):
+                yield chunk_out
 
+        decisions = self._review_streamed_tool_calls(review, message, history, system, model_used, kwargs)
+        for held_chunk in review.release(decisions):
+            yield held_chunk
         elapsed = time.monotonic() - start_time
         full_content = "".join(accumulated_parts)
         self._last_model = model_used
@@ -1347,6 +1479,7 @@ class TheseusWrapper:
             divergence_tier=div_result.tier.value,
             provenance_id=provenance_id,
             sandbox_divergence=sandbox_divergence,
+            tool_decisions=decisions,
         )
 
     async def astream_chat(
@@ -1385,6 +1518,7 @@ class TheseusWrapper:
         accumulated_parts: list[str] = []
         model_used = model or self._default_model_for_provider(self._provider) or "unknown"
 
+        review = _StreamToolReview(self._stream_enforces())
         if hasattr(raw_stream, "__aiter__"):
             async for raw_chunk in raw_stream:
                 chunk_model = self._extract_model(raw_chunk, None)
@@ -1394,7 +1528,7 @@ class TheseusWrapper:
                 if delta:
                     accumulated_parts.append(delta)
                 accumulated = "".join(accumulated_parts)
-                yield CTStreamChunk(
+                chunk_out = CTStreamChunk(
                     delta=delta,
                     accumulated_content=accumulated,
                     provider=self._provider,
@@ -1402,6 +1536,8 @@ class TheseusWrapper:
                     is_final=False,
                     raw_chunk=raw_chunk,
                 )
+                if review.offer(chunk_out):
+                    yield chunk_out
         else:
             for raw_chunk in raw_stream:
                 chunk_model = self._extract_model(raw_chunk, None)
@@ -1411,7 +1547,7 @@ class TheseusWrapper:
                 if delta:
                     accumulated_parts.append(delta)
                 accumulated = "".join(accumulated_parts)
-                yield CTStreamChunk(
+                chunk_out = CTStreamChunk(
                     delta=delta,
                     accumulated_content=accumulated,
                     provider=self._provider,
@@ -1419,7 +1555,12 @@ class TheseusWrapper:
                     is_final=False,
                     raw_chunk=raw_chunk,
                 )
+                if review.offer(chunk_out):
+                    yield chunk_out
 
+        decisions = await asyncio.to_thread(self._review_streamed_tool_calls, review, message, history, system, model_used, kwargs)
+        for held_chunk in review.release(decisions):
+            yield held_chunk
         elapsed = time.monotonic() - start_time
         full_content = "".join(accumulated_parts)
         self._last_model = model_used
@@ -1477,6 +1618,7 @@ class TheseusWrapper:
             divergence_tier=div_result.tier.value,
             provenance_id=provenance_id,
             sandbox_divergence=sandbox_divergence,
+            tool_decisions=decisions,
         )
 
     # ── Shadow Request Logic ──────────────────────────────────────────────────

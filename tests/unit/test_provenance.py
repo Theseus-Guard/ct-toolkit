@@ -82,7 +82,7 @@ class TestProvenanceLogWithStatus:
         conn.commit()
         conn.close()
 
-        last_hash = self.log._get_last_entry_hash()
+        _, last_hash = self.log._read_chain_tip()
         assert last_hash == entry1_hash
 
     # -- Safe Rollback ---------------------------------------------------------

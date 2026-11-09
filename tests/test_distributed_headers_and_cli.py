@@ -6,11 +6,15 @@ import base64
 import hashlib
 import hmac
 import json
+import shutil
 import sqlite3
+import subprocess
+from unittest.mock import patch
 import time
 from pathlib import Path
 
 import pytest
+
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -23,6 +27,39 @@ from ct_toolkit.server import app as fastapi_app
 from ct_toolkit.server import configure_server_auth
 
 runner = CliRunner()
+
+
+def test_dashboard_script_syntax_and_host_input() -> None:
+    """The served JavaScript parses and preserves newline-separated tool-guard hosts."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to validate the dashboard JavaScript")
+
+    html = TestClient(fastapi_app).get("/dashboard").text
+    assert html.count("<script>") == 1
+    script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+    check = r"""
+const assert = require('node:assert/strict');
+const source = require('node:fs').readFileSync(0, 'utf8');
+new Function(source); // Parse the complete script that the browser receives.
+const between = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
+const functions = between('    function splitToolGuardHosts', '    function updateToolGuardControls')
+  + between('    function populateToolGuardForm', '    async function fetchToolGuard');
+const elements = {};
+const document = { getElementById(id) { return elements[id] ||= {}; } };
+const toolGuardState = {};
+const updateToolGuardControls = () => {};
+const { splitToolGuardHosts, populateToolGuardForm } = new Function(
+  'document', 'toolGuardState', 'updateToolGuardControls',
+  functions + '\nreturn { splitToolGuardHosts, populateToolGuardForm };'
+)(document, toolGuardState, updateToolGuardControls);
+populateToolGuardForm({settings: {mode: 'observe', extra_hosts: ['one.example', 'two.example']}});
+assert.equal(elements['tg-hosts'].value, 'one.example\ntwo.example');
+assert.deepEqual(splitToolGuardHosts(' one.example, two.example\nthree.example \n'),
+  ['one.example', 'two.example', 'three.example']);
+"""
+    result = subprocess.run([node, "-e", check], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_propagate_and_from_headers_with_hmac(tmp_path: Path) -> None:
@@ -288,6 +325,8 @@ def test_web_dashboard_ui_and_telemetry_api(tmp_path: Path) -> None:
         assert html_resp.headers.get("cache-control") == "no-store"
         assert "Computational Theseus Toolkit" in html_resp.text
         assert "/api/dashboard/status" in html_resp.text
+        assert r"value.split(/[\n,]/)" in html_resp.text
+        assert r"(s.extra_hosts || []).join('\n')" in html_resp.text
 
         # 2. JSON Telemetry API (also verifies absolute path is redacted to basename)
         api_resp = client.get("/api/dashboard/status")
@@ -309,6 +348,12 @@ def test_web_dashboard_ui_and_telemetry_api(tmp_path: Path) -> None:
             conn.execute("UPDATE provenance SET divergence_score = 0.88")
             conn.commit()
 
+        # The background verifier publishes the integrity result; here one full pass is run on demand, with the
+        # full-pass interval shortened so that it is due. The poll then reports what that pass found.
+        from ct_toolkit.server import _dashboard_log
+
+        with patch("ct_toolkit.provenance.log.FULL_VERIFY_INTERVAL_S", 0.0):
+            _dashboard_log().check_integrity()
         tampered_api = client.get("/api/dashboard/status")
         assert tampered_api.status_code == 200
         t_data = tampered_api.json()
