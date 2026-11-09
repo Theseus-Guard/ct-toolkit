@@ -20,7 +20,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import httpx
@@ -48,16 +49,28 @@ def request_context(request: dict) -> tuple[str, str]:
     if isinstance(context.get("messages"), list):
         context["messages"] = [m for m in context["messages"] if not (isinstance(m, dict) and m.get("role") == "assistant")]
     conversation = json.dumps(context, ensure_ascii=False)
+    if isinstance(request.get("input"), str):  # Responses API, plain text input
+        return conversation, request["input"]
     task_parts = []
-    for message in request.get("messages") or []:
+    for message in request.get("messages") or request.get("input") or []:
         if not isinstance(message, dict) or message.get("role") != "user":
             continue
         content = message.get("content")
         if isinstance(content, str):
             task_parts.append(content)
         elif isinstance(content, list):
-            task_parts.extend(b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+            task_parts.extend(b["text"] for b in content if isinstance(b, dict) and b.get("type") in ("text", "input_text") and isinstance(b.get("text"), str))
     return conversation, "\n\n".join(task_parts)
+
+
+@dataclass
+class Blocked:
+    """The blocked calls of one stream, by the index or call id each format uses."""
+
+    openai: set[int] = field(default_factory=set)
+    anthropic: set[int] = field(default_factory=set)
+    responses: set[int] = field(default_factory=set)
+    response_ids: set[str] = field(default_factory=set)
 
 
 class StreamToolCalls:
@@ -66,6 +79,7 @@ class StreamToolCalls:
     def __init__(self) -> None:
         self._openai: dict[int, dict[str, Any]] = {}
         self._anthropic: dict[int, dict[str, Any]] = {}
+        self._responses: dict[int, dict[str, Any]] = {}
 
     def feed(self, line: str) -> None:
         """Feeds one SSE line; only `data:` lines carry tool calls."""
@@ -75,14 +89,24 @@ class StreamToolCalls:
     def feed_event(self, event: Any) -> None:
         if not isinstance(event, dict):
             return
-        if event.get("type") == "content_block_start" and isinstance(event.get("content_block"), dict):
+        kind = event.get("type")
+        if kind == "content_block_start" and isinstance(event.get("content_block"), dict):
             block = event["content_block"]
             if block.get("type") == "tool_use":
                 self._anthropic[event.get("index", 0)] = {"id": block.get("id"), "name": block.get("name"), "input": ""}
-        elif event.get("type") == "content_block_delta" and isinstance(event.get("delta"), dict):
+        elif kind == "content_block_delta" and isinstance(event.get("delta"), dict):
             delta = event["delta"]
             if delta.get("type") == "input_json_delta" and event.get("index") in self._anthropic:
                 self._anthropic[event["index"]]["input"] += delta.get("partial_json") or ""
+        elif kind == "response.output_item.added" and (event.get("item") or {}).get("type") == "function_call":
+            item = event["item"]
+            self._responses[event.get("output_index", 0)] = {
+                "id": item.get("call_id") or item.get("id"),
+                "name": item.get("name") or "",
+                "arguments": item.get("arguments") or "",
+            }
+        elif kind == "response.function_call_arguments.delta" and event.get("output_index") in self._responses:
+            self._responses[event["output_index"]]["arguments"] += event.get("delta") or ""
         for choice in event.get("choices") or []:
             for call in ((choice or {}).get("delta") or {}).get("tool_calls") or []:
                 slot = self._openai.setdefault(call.get("index", 0), {"id": None, "name": "", "arguments": ""})
@@ -98,11 +122,34 @@ class StreamToolCalls:
                 for _, slot in sorted(self._openai.items())
             ]
             return {"choices": [{"message": {"tool_calls": calls}}]}
+        if self._responses:
+            return {
+                "output": [
+                    {"type": "function_call", "call_id": slot["id"], "name": slot["name"], "arguments": slot["arguments"]}
+                    for _, slot in sorted(self._responses.items())
+                ]
+            }
         blocks = [
             {"type": "tool_use", "id": slot["id"], "name": slot["name"], "input": slot["input"] or "{}"}
             for _, slot in sorted(self._anthropic.items())
         ]
         return {"content": blocks}
+
+    def blocked(self, positions: Iterable[int]) -> Blocked:
+        """The stream's own indexes and call ids for review positions (numbered as `tool_calls_of` numbers them)."""
+        openai_keys, anthropic_keys, response_keys = sorted(self._openai), sorted(self._anthropic), sorted(self._responses)
+        result = Blocked()
+        for position in positions:
+            if position < len(openai_keys):
+                result.openai.add(openai_keys[position])
+            if position < len(anthropic_keys):
+                result.anthropic.add(anthropic_keys[position])
+            if position < len(response_keys):
+                result.responses.add(response_keys[position])
+                call_id = self._responses[response_keys[position]]["id"]
+                if call_id:
+                    result.response_ids.add(call_id)
+        return result
 
 
 def _json_or_none(text: str) -> Any:
@@ -141,7 +188,7 @@ async def _sse_events(upstream_response: httpx.Response) -> AsyncIterator[list[s
 
 
 def _is_tool_event(data: Any) -> bool:
-    """Whether an event starts or carries tool calls, in OpenAI or Anthropic streaming format."""
+    """Whether an event starts or carries tool calls, in OpenAI, Anthropic or Responses streaming format."""
     if not isinstance(data, dict):
         return False
     kind = data.get("type")
@@ -151,28 +198,37 @@ def _is_tool_event(data: Any) -> bool:
         return True
     if kind == "message_delta" and (data.get("delta") or {}).get("stop_reason") == "tool_use":
         return True
+    if kind == "response.output_item.added" and (data.get("item") or {}).get("type") == "function_call":
+        return True
+    if kind == "response.function_call_arguments.delta":
+        return True
     return any(
         (choice or {}).get("finish_reason") == "tool_calls" or ((choice or {}).get("delta") or {}).get("tool_calls")
         for choice in data.get("choices") or []
     )
 
 
-def _drop_blocked(
-    name: str,
-    lines: list[str],
-    data: Any,
-    blocked_openai: set[int],
-    blocked_anthropic: set[int],
-    calls_left: int,
-) -> Optional[list[str]]:
+def _drop_blocked(name: str, lines: list[str], data: Any, blocked: Blocked, calls_left: int) -> Optional[list[str]]:
     """The event without its blocked calls, or None when nothing of it is left to send."""
     if not isinstance(data, dict):
         return lines
+    kind = data.get("type")
     changed = False
-    if data.get("type") in ("content_block_start", "content_block_delta", "content_block_stop"):
-        if data.get("index") in blocked_anthropic:
+    if kind in ("content_block_start", "content_block_delta", "content_block_stop") and data.get("index") in blocked.anthropic:
+        return None
+    if kind in ("response.output_item.added", "response.output_item.done") and (data.get("item") or {}).get("type") == "function_call":
+        if data.get("output_index") in blocked.responses:
             return None
-    if data.get("type") == "message_delta" and (data.get("delta") or {}).get("stop_reason") == "tool_use" and calls_left == 0:
+    if kind in ("response.function_call_arguments.delta", "response.function_call_arguments.done") and data.get("output_index") in blocked.responses:
+        return None
+    if kind == "response.completed" and isinstance(data.get("response"), dict):
+        output = data["response"].get("output")
+        if isinstance(output, list):
+            kept = [item for item in output if not (isinstance(item, dict) and item.get("call_id") in blocked.response_ids)]
+            if len(kept) != len(output):
+                data["response"]["output"] = kept
+                changed = True
+    if kind == "message_delta" and (data.get("delta") or {}).get("stop_reason") == "tool_use" and calls_left == 0:
         data["delta"]["stop_reason"] = "end_turn"
         changed = True
     empty = True
@@ -180,11 +236,11 @@ def _drop_blocked(
         delta = (choice or {}).get("delta") or {}
         calls = delta.get("tool_calls")
         if calls:
-            kept = [call for call in calls if call.get("index", 0) not in blocked_openai]
-            if len(kept) != len(calls):
+            kept_calls = [call for call in calls if call.get("index", 0) not in blocked.openai]
+            if len(kept_calls) != len(calls):
                 changed = True
-            if kept:
-                delta["tool_calls"] = kept
+            if kept_calls:
+                delta["tool_calls"] = kept_calls
             else:
                 delta.pop("tool_calls")
         if choice.get("finish_reason") == "tool_calls" and calls_left == 0:
@@ -224,7 +280,9 @@ class ProxyReviewer:
 
 
 def is_model_turn(path: str, body: Any) -> bool:
-    return isinstance(body, dict) and "messages" in body and not path.endswith("/count_tokens")
+    if not isinstance(body, dict) or path.endswith("/count_tokens"):
+        return False
+    return "messages" in body or ("input" in body and path.endswith("/responses"))
 
 
 def create_app(
@@ -323,19 +381,14 @@ async def _enforced_stream(upstream_response: httpx.Response, request: dict, rev
     if held is None:
         return
 
-    response = rebuilt.response()
-    decisions = await asyncio.to_thread(reviewer.review, request, response)
-    blocked = reviewer.blocked_indexes(decisions)
-    if blocked:
-        logger.warning(f"tool guard removed {len(blocked)} call(s) from a stream")
-    total_calls = len(decisions)
-    openai_keys = sorted(rebuilt._openai)
-    anthropic_keys = sorted(rebuilt._anthropic)
-    blocked_openai = {openai_keys[i] for i in blocked if i < len(openai_keys)}
-    blocked_anthropic = {anthropic_keys[i] for i in blocked if i < len(anthropic_keys)}
-    calls_left = total_calls - len(blocked)
+    decisions = await asyncio.to_thread(reviewer.review, request, rebuilt.response())
+    positions = reviewer.blocked_indexes(decisions)
+    if positions:
+        logger.warning(f"tool guard removed {len(positions)} call(s) from a stream")
+    blocked = rebuilt.blocked(positions)
+    calls_left = len(decisions) - len(positions)
 
     for name, lines, data in held:
-        kept = _drop_blocked(name, lines, data, blocked_openai, blocked_anthropic, calls_left)
+        kept = _drop_blocked(name, lines, data, blocked, calls_left)
         if kept is not None:
             yield ("\n".join(kept) + "\n\n").encode()

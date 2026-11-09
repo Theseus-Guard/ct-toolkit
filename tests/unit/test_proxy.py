@@ -203,3 +203,46 @@ def test_proxy_records_entries_that_do_not_count_as_interactions(tmp_path, mode)
     client, provenance = make_client(tmp_path, json_handler(completion(BAD_CALL)), mode)
     client.post("/v1/chat/completions", json=REQUEST)
     assert provenance.get_interaction_count("general", "default", "gpt-4o-mini") == 0
+
+
+RESPONSES_REQUEST = {"model": "gpt-5", "tools": TOOLS, "input": "run the tests"}
+
+
+def responses_completion(*calls):
+    """A Responses API body whose output holds function_call items."""
+    return {"id": "r", "object": "response", "output": [{"type": "function_call", "call_id": cid, "name": name, "arguments": args} for cid, name, args in calls]}
+
+
+class TestResponsesApi:
+    def test_enforce_removes_blocked_function_call_from_json(self, tmp_path):
+        payload = responses_completion(("c1", "bash", '{"command": "pytest -q"}'), ("c2", "shell_exec", "{}"))
+        client, provenance = make_client(tmp_path, json_handler(payload), "enforce")
+        response = client.post("/v1/responses", json=RESPONSES_REQUEST)
+
+        assert [item["call_id"] for item in response.json()["output"]] == ["c1"]
+        assert [e["metadata"]["verdict"] for e in audit_entries(provenance)] == ["passed", "blocked"]
+
+    def test_plain_text_input_is_the_task(self):
+        conversation, task = request_context(RESPONSES_REQUEST)
+        assert task == "run the tests"
+
+    def test_enforce_drops_blocked_call_events_and_filters_completed_output(self, tmp_path):
+        events = [
+            {"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "call_id": "c1", "name": "bash", "arguments": ""}},
+            {"type": "response.function_call_arguments.delta", "output_index": 0, "delta": '{"command": "pytest -q"}'},
+            {"type": "response.output_item.added", "output_index": 1, "item": {"type": "function_call", "call_id": "c2", "name": "shell_exec", "arguments": ""}},
+            {"type": "response.function_call_arguments.delta", "output_index": 1, "delta": "{}"},
+            {"type": "response.output_item.done", "output_index": 1, "item": {"type": "function_call", "call_id": "c2", "name": "shell_exec", "arguments": "{}"}},
+            {"type": "response.completed", "response": {"output": [
+                {"type": "function_call", "call_id": "c1", "name": "bash", "arguments": '{"command": "pytest -q"}'},
+                {"type": "function_call", "call_id": "c2", "name": "shell_exec", "arguments": "{}"},
+            ]}},
+        ]
+        body = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+        client, provenance = make_client(tmp_path, sse_handler(body), "enforce")
+        response = client.post("/v1/responses", json={**RESPONSES_REQUEST, "stream": True})
+
+        assert response.status_code == 200
+        assert "pytest -q" in response.text
+        assert "shell_exec" not in response.text
+        assert [e["metadata"]["verdict"] for e in audit_entries(provenance)] == ["passed", "blocked"]

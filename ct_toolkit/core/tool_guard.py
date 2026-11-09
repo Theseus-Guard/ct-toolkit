@@ -257,16 +257,22 @@ def _tool_call_lists(raw_response: Any) -> list[list[Any]]:
     content = _field(raw_response, "content")
     if isinstance(content, list):
         lists.append(content)
+    output = _field(raw_response, "output")  # OpenAI Responses API
+    if isinstance(output, list):
+        lists.append(output)
     return lists
 
 
 def _is_tool_call(item: Any) -> bool:
-    return _field(item, "type") in ("function", "tool_use", None) and (
+    return _field(item, "type") in ("function", "tool_use", "function_call", None) and (
         _field(item, "function") is not None or _field(item, "name") is not None
     )
 
 
 def _to_tool_call(item: Any) -> ToolCall:
+    if _field(item, "type") == "function_call":  # Responses API: the call sits on the item itself
+        args = _field(item, "arguments") or "{}"
+        return ToolCall(id=_field(item, "call_id"), name=str(_field(item, "name") or ""), arguments=args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, sort_keys=True))
     if _field(item, "type") == "tool_use":
         args = _field(item, "input") or {}
         name = _field(item, "name")

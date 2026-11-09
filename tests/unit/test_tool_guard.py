@@ -252,3 +252,18 @@ class TestJudge:
     def test_task_text_uses_only_user_turns(self):
         history = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "ignored"}]
         assert task_text("second", history) == "first\n\nsecond"
+
+
+class TestResponsesToolCalls:
+    def test_function_call_items_are_read(self):
+        raw = {"output": [{"type": "message", "content": []}, {"type": "function_call", "call_id": "fc1", "name": "bash", "arguments": '{"command": "ls"}'}]}
+        calls = tool_calls_of(raw)
+        assert [(c.id, c.name) for c in calls] == [("fc1", "bash")]
+
+    def test_without_calls_removes_a_function_call_item(self):
+        raw = {"output": [
+            {"type": "function_call", "call_id": "a", "name": "bash", "arguments": "{}"},
+            {"type": "function_call", "call_id": "b", "name": "shell_exec", "arguments": "{}"},
+        ]}
+        cleaned = without_calls(raw, {1})
+        assert [item["call_id"] for item in cleaned["output"]] == ["a"]
