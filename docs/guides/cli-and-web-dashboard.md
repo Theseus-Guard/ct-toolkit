@@ -8,12 +8,16 @@ CT Toolkit provides both a **Rich Terminal CLI** and a self-hosted **Interactive
 
 ## Prerequisites
 
-Install the CLI and Server extras:
+The CLI and the web dashboard are part of the core install:
 
 ```bash
-pip install "ct-toolkit[cli,server]"
-# Or install all optional features (including PostgreSQL & OpenTelemetry):
 pip install ct-toolkit
+```
+
+For PostgreSQL vaults, OpenTelemetry and the other optional features:
+
+```bash
+pip install "ct-toolkit[all]"
 ```
 
 ---

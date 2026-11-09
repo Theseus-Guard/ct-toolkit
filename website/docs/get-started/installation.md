@@ -13,7 +13,9 @@
 pip install ct-toolkit
 ```
 
-This installs the core, the `ct-toolkit` command, the Web Audit Dashboard, the tool-call guard and the tool-call proxy. For PostgreSQL vaults, local embeddings, the ML judge, or OpenTelemetry, install the optional extras below or use `ct-toolkit[all]`:
+This installs the core: the `ct-toolkit` command, the Web Audit Dashboard, the tool-call guard and the tool-call proxy. No extra is needed for these.
+
+For PostgreSQL vaults, OpenTelemetry, framework middleware and the other features below, install the extras or use `ct-toolkit[all]`. `[all]` does not include the ML stack (`[ml]`, which pulls in PyTorch) or AutoGen (`[autogen]`), because both are large; install them separately when you need them:
 
 ```bash
 pip install "ct-toolkit[all]"
@@ -27,19 +29,17 @@ Install optional extras based on the features and frameworks you use:
 
 === "CLI & Web Dashboard"
 
-    ```bash
-    pip install "ct-toolkit[cli,server]"
-    ```
+    Included in the core install. There is nothing to add.
 
-    Enables `ct-toolkit status`, `ct-toolkit dashboard --web` (Interactive Web UI), `ct-toolkit audit`, and `ct-toolkit serve` (`click`, `rich`, `fastapi`, `uvicorn`).
+    Provides `ct-toolkit status`, `ct-toolkit dashboard --web` (interactive Web UI, including the tool-call guard settings), `ct-toolkit audit`, `ct-toolkit serve`, `ct-toolkit proxy` and `ct-toolkit tool-guard`.
 
-=== "Enterprise (PostgreSQL) & Observability (OTel)"
+=== "PostgreSQL vaults & Observability (OTel)"
 
     ```bash
-    pip install "ct-toolkit[enterprise,observability]"
+    pip install "ct-toolkit[postgres,observability]"
     ```
 
-    Enables SQLAlchemy / PostgreSQL provenance vaults (`vault_url`) and OpenTelemetry tracing/metrics (`opentelemetry-api`, `opentelemetry-sdk`).
+    Enables PostgreSQL provenance vaults (`--vault-type postgres`, `vault_url`) and OpenTelemetry tracing/metrics (`opentelemetry-api`, `opentelemetry-sdk`).
 
 === "Local Embeddings (FastEmbed)"
 
@@ -49,11 +49,13 @@ Install optional extras based on the features and frameworks you use:
 
     Enables local ONNX embeddings (`fastembed`) for offline Contrastive L1 divergence analysis without external API calls.
 
-=== "LangChain / CrewAI / AutoGen"
+=== "LangChain / AutoGen"
 
     ```bash
-    pip install "ct-toolkit[langchain,crewai,autogen]"
+    pip install "ct-toolkit[langchain,autogen]"
     ```
+
+    CrewAI is not available in extras at the moment: its dependency conflicts with the current litellm pin.
 
     Enables `TheseusChatModel`, `TheseusLangChainCallback`, `TheseusCrewMiddleware`, and `TheseusAutoGenMiddleware`.
 
@@ -63,13 +65,15 @@ Install optional extras based on the features and frameworks you use:
     pip install "ct-toolkit[ml]"
     ```
 
-    Enables `DivergencePenaltyLoss` for PyTorch training loops (`torch >= 2.0`).
+    Enables `DivergencePenaltyLoss` for PyTorch training loops, and fastembed-based embeddings. Requires `torch >= 2.13`.
 
 === "All extras"
 
     ```bash
     pip install "ct-toolkit[all]"
     ```
+
+    PostgreSQL, OpenTelemetry, structured outputs, vision, Ollama and LangChain. Not included: `[ml]` (PyTorch) and `[autogen]`.
 
 ---
 
@@ -176,7 +180,7 @@ CT Toolkit's lightweight core dependencies:
 | `jinja2`       | System prompt templating                                  |
 
 !!! note "Modular Optional Extras"
-    The core does **not** require PyTorch. It is needed only for `[ml]`, which provides the divergence penalty loss and fastembed-based embeddings. The CLI, the web layer (FastAPI, Uvicorn) and the tool-call guard are part of the core install.
+    The core does **not** require PyTorch. It is needed only for `[ml]`, which provides the divergence penalty loss. The CLI, the web dashboard (FastAPI, Uvicorn) and the tool-call guard are part of the core install.
 
 ---
 

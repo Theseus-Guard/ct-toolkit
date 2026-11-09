@@ -8,10 +8,10 @@ The **CT Toolkit CLI** (`ct-toolkit`) provides both a **Rich terminal interface*
 
 ## Installation
 
-Install CT Toolkit with the CLI and Server extras:
+The CLI is part of the core install:
 
 ```bash
-pip install "ct-toolkit[cli,server]"
+pip install ct-toolkit
 ```
 
 Verify the installation:

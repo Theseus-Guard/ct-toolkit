@@ -238,7 +238,7 @@ If any entry is manipulated →
 
 `ProvenanceLog` supports both local SQLite vaults and enterprise SQLAlchemy databases (PostgreSQL, MySQL):
 - **Local SQLite (`vault_path="./ct_provenance.db"`)**: Zero-dependency local persistence with automatic schema migration.
-- **Enterprise SQLAlchemy / PostgreSQL (`vault_url="postgresql+psycopg2://..."`)**: Production-grade relational storage via `pip install "ct-toolkit[enterprise]"`.
+- **Enterprise SQLAlchemy / PostgreSQL (`vault_url="postgresql+psycopg2://..."`)**: Production-grade relational storage via `pip install "ct-toolkit[postgres]"`.
 - **Paginated Verification (`verify_chain(batch_size=1000)`)**: Streams entries in configurable batches with constant $O(1)$ memory overhead, enabling verification of millions of log entries without exhausting RAM.
 
 ### Secret Key Management
