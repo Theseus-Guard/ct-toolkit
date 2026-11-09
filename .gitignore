@@ -64,3 +64,5 @@ config/llm_capability.yaml
 examples/opencode-bedrock/logs/
 examples/opencode-bedrock/.litellm_master_key
 examples/opencode-bedrock/tool_guard_settings.json
+docs/architecture.md
+docs/WHY.md
