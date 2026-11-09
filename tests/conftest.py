@@ -28,8 +28,6 @@ _NEEDS = {
         "unit/test_middleware_langchain.py",
         "unit/test_middleware_litellm.py",
     ],
-    "autogen": ["unit/test_middleware_autogen.py"],
-    "crewai": ["unit/test_middleware_crewai.py"],
 }
 
 collect_ignore = [
