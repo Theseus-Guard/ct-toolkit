@@ -307,6 +307,20 @@ _dashboard_log_cache: Optional[tuple[tuple[str, str], ProvenanceLog]] = None
 DASHBOARD_POLL_INTERVAL_S = 5.0  # background integrity check interval
 _full_verify_interval_s: Optional[float] = None
 _read_cache = GenerationCache(maxsize=128, max_age_s=30.0)
+GENERATION_CHECK_INTERVAL_S = 1.0  # how often a process asks the database for the generation (one round trip)
+_generation_seen: dict[int, tuple[int, float]] = {}
+
+
+def _generation(log: ProvenanceLog) -> int:
+    """The vault's write generation, read from the database at most once per GENERATION_CHECK_INTERVAL_S.
+    Writes by other processes therefore show within that interval."""
+    now = time.monotonic()
+    seen = _generation_seen.get(id(log))
+    if seen is not None and now - seen[1] < GENERATION_CHECK_INTERVAL_S:
+        return seen[0]
+    value = log.generation()
+    _generation_seen[id(log)] = (value, now)
+    return value
 
 
 def _dashboard_log() -> ProvenanceLog:
@@ -420,7 +434,7 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
     status = log.integrity_status() or log.check_integrity()
     figures = _read_cache.get_or_compute(
         ("telemetry", id(log), limit, active_kernel, active_template),
-        log.generation(),
+        _generation(log),
         lambda: _telemetry_figures(log, limit, active_kernel, active_template),
     )
 
@@ -496,7 +510,7 @@ def dashboard_tool_calls_api(
         log = _dashboard_log()
         result = _read_cache.get_or_compute(
             ("tool-calls", id(log), verdict, tool, q, sort, order, page, page_size),
-            log.generation(),
+            _generation(log),
             lambda: query_page(
                 log,
                 verdict=verdict,

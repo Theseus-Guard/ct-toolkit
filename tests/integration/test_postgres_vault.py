@@ -144,3 +144,13 @@ def test_older_schema_is_upgraded_on_open():
     upgraded = ProvenanceLog(vault_type="postgres", vault_path=URL)
     assert upgraded.counters()["tool:total"] == 1
     assert query_page(upgraded, verdict="passed").total == 1
+
+
+def test_second_writer_keeps_the_chain_valid(log):
+    """A second log object writes to the same database: the first one's cached tip is stale."""
+    other = ProvenanceLog(vault_type="postgres", vault_path=URL)
+    log.record("q", "a")
+    other.record("q", "b")
+    log.record("q", "c")
+    assert log.verify_chain() is True
+    assert len(log.export_log()) == 3

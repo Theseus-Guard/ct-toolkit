@@ -132,3 +132,15 @@ def test_older_vault_gets_derived_columns_and_counters(tmp_path):
     assert upgraded.counters()["tool:total"] == 1
     page = query_page(upgraded, verdict="passed")
     assert page.total == 1 and page.items[0].tool == "bash"
+
+
+def test_second_writer_on_the_same_vault_keeps_the_chain_valid(tmp_path):
+    """Two log objects on one vault, as two processes would have: the first one's cached tip goes stale."""
+    path = str(tmp_path / "shared.db")
+    first = ProvenanceLog(vault_path=path)
+    second = ProvenanceLog(vault_path=path)
+    first.record("q", "a")
+    second.record("q", "b")  # moves the tip under `first`
+    first.record("q", "c")  # its cached tip is stale: the conditional write retries on the current tip
+    assert first.verify_chain() is True
+    assert len(first.export_log()) == 3

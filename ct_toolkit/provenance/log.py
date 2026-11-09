@@ -192,6 +192,7 @@ class ProvenanceLog:
             self._conn = self._init_db()
         self._verified_tip: dict[str, Any] | None = None
         self._verified_at = 0.0
+        self._chain_tip: tuple[str, str] | None = None  # (id, content hash) of the newest entry this process wrote
         # Seconds between full verification passes. None uses FULL_VERIFY_INTERVAL_S.
         self.full_verify_interval_s: float | None = None
         self._verify_lock = threading.RLock()
@@ -232,30 +233,38 @@ class ProvenanceLog:
         Returns: entry ID
         """
         with self._lock:
-            prev_hash = self._get_last_entry_hash()
+            for _ in range(2):
+                # The cached tip is trusted only for PostgreSQL, where the write itself checks it. SQLite reads it.
+                tip_id, prev_hash = self._chain_tip if (self._chain_tip and self._dialect() != "sqlite") else self._read_chain_tip()
 
-            # Mask sensitive data in metadata before storing
-            safe_metadata = self._sanitize_metadata(metadata or {})
-            
-            # Sanitize and truncate text for logging
-            safe_request = self._sanitize_text_for_log(request_text, self.MAX_REQUEST_LOG_LENGTH)
-            safe_response = self._sanitize_text_for_log(response_text, self.MAX_RESPONSE_LOG_LENGTH)
+                # Mask sensitive data in metadata before storing
+                safe_metadata = self._sanitize_metadata(metadata or {})
 
-            entry = ProvenanceEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                request_hash=self._hash_text(safe_request),
-                response_hash=self._hash_text(safe_response),
-                divergence_score=divergence_score,
-                metadata=safe_metadata,
-                prev_entry_hash=prev_hash,
-                status="active",
-            )
+                # Sanitize and truncate text for logging
+                safe_request = self._sanitize_text_for_log(request_text, self.MAX_REQUEST_LOG_LENGTH)
+                safe_response = self._sanitize_text_for_log(response_text, self.MAX_RESPONSE_LOG_LENGTH)
 
-            content_hash = entry.content_hash()
-            entry.hmac_signature = self._compute_hmac(content_hash)
+                entry = ProvenanceEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    request_hash=self._hash_text(safe_request),
+                    response_hash=self._hash_text(safe_response),
+                    divergence_score=divergence_score,
+                    metadata=safe_metadata,
+                    prev_entry_hash=prev_hash,
+                    status="active",
+                )
 
-            self._write_entry(entry)
+                content_hash = entry.content_hash()
+                entry.hmac_signature = self._compute_hmac(content_hash)
+
+                if self._write_entry(entry, expected_tip_id=tip_id):
+                    self._chain_tip = (entry.id, content_hash)
+                    break
+                # Another writer appended after our tip: read it again and sign the entry on top of that.
+                self._chain_tip = None
+            else:
+                raise VaultError("the chain tip kept changing while writing; try again")
         logger.debug(f"Provenance recorded | id={entry.id} | divergence={divergence_score}")
         return entry.id
     
@@ -335,7 +344,7 @@ class ProvenanceLog:
         logger.info(f"Chain verified: {total_verified} active entries valid (batch_size={batch_size}).")
         return True
 
-    def get_chain_checkpoint(self, batch_size: int = 500) -> dict[str, Any]:
+    def get_chain_checkpoint(self, batch_size: int = 2000) -> dict[str, Any]:
         """
         Verifies the chain in batches and returns a checkpoint dictionary
         (`offset`, `last_entry_id`, `last_content_hash`) that can be passed to
@@ -345,35 +354,37 @@ class ProvenanceLog:
             batch_size = 500
 
         expected_prev = self.GENESIS_HASH
-        offset = 0
         total_verified = 0
         last_entry_id: str | None = None
         last_timestamp: float | None = None
+        cursor_ts, cursor_id = -1.0, ""  # keyset position: the batch starts after this entry
 
         while True:
             with self._lock:
-                batch = self._load_entries_batch(
-                    limit=batch_size,
-                    offset=offset,
-                    include_rolled_back=False,
+                batch = self._select(
+                    "status = 'active' AND (timestamp > :ts OR (timestamp = :ts AND id > :id))",
+                    {"ts": cursor_ts, "id": cursor_id},
+                    "timestamp ASC, id ASC",
+                    batch_size,
                 )
             if not batch:
                 break
 
             for entry in batch:
-                expected_hmac = self._compute_hmac(entry.content_hash())
+                content = entry.content_hash()  # computed once: it is both the HMAC input and the next link
+                expected_hmac = self._compute_hmac(content)
                 if not hmac.compare_digest(entry.hmac_signature, expected_hmac):
                     raise ChainIntegrityError(entry_id=entry.id)
                 if entry.prev_entry_hash != expected_prev:
                     raise ChainIntegrityError(entry_id=entry.id)
-                expected_prev = entry.content_hash()
+                expected_prev = content
                 last_entry_id = entry.id
                 last_timestamp = entry.timestamp
                 total_verified += 1
+            cursor_ts, cursor_id = batch[-1].timestamp, batch[-1].id
 
             if len(batch) < batch_size:
                 break
-            offset += len(batch)
 
         return {
             "verified_count": total_verified,
@@ -471,6 +482,22 @@ class ProvenanceLog:
                 limit,
             )
 
+    def _select_with_total(
+        self, where: str, params: dict[str, Any], order: str, limit: int, offset: int, total_sql: str
+    ) -> tuple[list[ProvenanceEntry], int | None]:
+        """One page of entries and the total, in one statement: `total_sql` is a scalar subquery, evaluated once.
+        The total is None when the page has no rows or the subquery has no value."""
+        sql = (
+            f"SELECT {ENTRY_COLUMNS}, ({total_sql}) AS total FROM provenance WHERE {where} "
+            f"ORDER BY {order} LIMIT :limit OFFSET :offset"
+        )
+        with self._transaction() as run:
+            rows = run(sql, {**params, "limit": int(limit), "offset": int(offset)})
+        if not rows:
+            return [], None
+        total = rows[0][9]
+        return [self._row_to_entry(tuple(row[:9])) for row in rows], None if total is None else int(total)
+
     def tool_call_page(
         self,
         *,
@@ -499,18 +526,24 @@ class ProvenanceLog:
             params["q"] = f"%{_escape_like(search)}%"
         clause = " AND ".join(where)
         direction = "ASC" if order == "asc" else "DESC"
+        order_by = f"{TOOL_CALL_SORT[sort]} {direction}, timestamp {direction}, id {direction}"
+        requested = max(1, page)
+        filtered = verdict is not None or bool(tool) or bool(search)
+        # Unfiltered, the total is the pre-computed counter; filtered, it is a count over the same filter.
+        total_sql = (
+            f"SELECT COUNT(*) FROM provenance WHERE {clause}" if filtered
+            else "SELECT value FROM provenance_counters WHERE name = 'tool:total'"
+        )
         with self._lock:
-            with self._transaction() as run:
-                total = int(run(f"SELECT COUNT(*) FROM provenance WHERE {clause}", params)[0][0])
+            entries, total = self._select_with_total(clause, params, order_by, page_size, (requested - 1) * page_size, total_sql)
+            if total is None:
+                # The page has no rows: it is empty, or it lies past the last page. Count, then clamp.
+                with self._transaction() as run:
+                    total = int(run(f"SELECT COUNT(*) FROM provenance WHERE {clause}", params)[0][0])
             pages = max(1, -(-total // page_size))
-            page = min(max(1, page), pages)
-            entries = self._select(
-                clause,
-                params,
-                f"{TOOL_CALL_SORT[sort]} {direction}, timestamp {direction}, id {direction}",
-                page_size,
-                (page - 1) * page_size,
-            )
+            page = min(requested, pages)
+            if page != requested and total > 0:
+                entries = self._select(clause, params, order_by, page_size, (page - 1) * page_size)
         return entries, total, page, pages
 
     def find_tool_calls(self, id_prefix: str, limit: int = 2) -> list[ProvenanceEntry]:
@@ -556,13 +589,14 @@ class ProvenanceLog:
                             batch_size,
                         )
                     for entry in batch:
-                        expected = self._compute_hmac(entry.content_hash())
+                        content = entry.content_hash()
+                        expected = self._compute_hmac(content)
                         if not hmac.compare_digest(entry.hmac_signature, expected) or entry.prev_entry_hash != tip["hash"]:
                             raise ChainIntegrityError(entry_id=entry.id)
                         tip = {
                             "timestamp": entry.timestamp,
                             "id": entry.id,
-                            "hash": entry.content_hash(),
+                            "hash": content,
                             "count": tip["count"] + 1,
                         }
                     if len(batch) < batch_size:
@@ -790,6 +824,7 @@ class ProvenanceLog:
                 backend = "SQLAlchemy" if self._use_sqlalchemy else "SQLite"
                 raise VaultError(f"{backend} rollback error: {e}") from e
             self._verified_tip = None
+            self._chain_tip = None
             logger.info(f"Provenance log rolled back for agent '{agent_id}' to entry '{entry_id}'")
 
     # ── Database ──────────────────────────────────────────────────────────────
@@ -911,9 +946,11 @@ class ProvenanceLog:
             (f"tool:tool:{derived['tool']}", sign),
         ]
 
-    def _write_entry(self, entry: ProvenanceEntry) -> None:
+    def _write_entry(self, entry: ProvenanceEntry, expected_tip_id: str | None = None) -> bool:
+        """Writes the entry and its counters. Returns False when the chain tip is no longer `expected_tip_id`
+        (PostgreSQL only; SQLite is written unconditionally, under the vault lock)."""
         derived = self._derived(entry.metadata)
-        params = {
+        params: dict[str, Any] = {
             "id": entry.id,
             "timestamp": entry.timestamp,
             "request_hash": entry.request_hash,
@@ -925,12 +962,46 @@ class ProvenanceLog:
             "status": entry.status,
             **derived,
         }
+        counters = [*self._counter_deltas(entry.metadata, +1), (GENERATION_COUNTER, 1.0)]
         try:
+            if self._dialect() == "sqlite":
+                with self._transaction() as run:
+                    run(_INSERT_ENTRY, params)
+                    for name, delta in counters:
+                        run(_ADD_COUNTER, {"name": name, "value": delta})
+                return True
+
+            # One statement, so one network round trip. The entry is inserted only if the newest active entry is
+            # still the expected one, and the counters only if the entry was inserted.
+            params["expected_tip"] = expected_tip_id
+            columns = (
+                "id, timestamp, request_hash, response_hash, divergence_score, metadata, prev_entry_hash, "
+                "hmac_signature, status, event, verdict, tool, mode, event_type"
+            )
+            casts = {
+                "id": "TEXT", "timestamp": "DOUBLE PRECISION", "request_hash": "TEXT", "response_hash": "TEXT",
+                "divergence_score": "DOUBLE PRECISION", "metadata": "TEXT", "prev_entry_hash": "TEXT",
+                "hmac_signature": "TEXT", "status": "TEXT", "event": "TEXT", "verdict": "TEXT", "tool": "TEXT",
+                "mode": "TEXT", "event_type": "TEXT",
+            }
+            select_list = ", ".join(f"CAST(:{name} AS {casts[name]})" for name in columns.replace(" ", "").split(","))
+            value_rows = []
+            for index, (name, delta) in enumerate(counters):
+                params[f"cname{index}"] = name
+                params[f"cvalue{index}"] = delta
+                value_rows.append(f"(CAST(:cname{index} AS TEXT), CAST(:cvalue{index} AS DOUBLE PRECISION))")
+            sql = (
+                "WITH entry AS ("
+                f"INSERT INTO provenance ({columns}) SELECT {select_list} "
+                "WHERE (SELECT id FROM provenance WHERE status = 'active' ORDER BY timestamp DESC, id DESC LIMIT 1) "
+                "IS NOT DISTINCT FROM CAST(:expected_tip AS TEXT) RETURNING id) "
+                "INSERT INTO provenance_counters (name, value) SELECT c.name, c.value "
+                f"FROM (VALUES {', '.join(value_rows)}) AS c(name, value) WHERE EXISTS (SELECT 1 FROM entry) "
+                "ON CONFLICT (name) DO UPDATE SET value = provenance_counters.value + excluded.value "
+                "RETURNING name"
+            )
             with self._transaction() as run:
-                run(_INSERT_ENTRY, params)
-                for name, delta in self._counter_deltas(entry.metadata, +1):
-                    run(_ADD_COUNTER, {"name": name, "value": delta})
-                run(_ADD_COUNTER, {"name": GENERATION_COUNTER, "value": 1.0})
+                return bool(run(sql, params))
         except Exception as e:
             backend = "SQLAlchemy" if self._use_sqlalchemy else "SQLite"
             raise VaultError(f"{backend} write error: {e}") from e
@@ -992,28 +1063,12 @@ class ProvenanceLog:
         rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
-    def _get_last_entry_hash(self) -> str:
-        if self._use_sqlalchemy:
-            from sqlalchemy import text
-            with self._engine.connect() as conn:
-                row = conn.execute(
-                    text(
-                        "SELECT id, timestamp, request_hash, response_hash, "
-                        "divergence_score, metadata, prev_entry_hash, hmac_signature, status "
-                        "FROM provenance WHERE status = 'active' ORDER BY timestamp DESC LIMIT 1"
-                    )
-                ).fetchone()
-                if not row:
-                    return self.GENESIS_HASH
-                return self._row_to_entry(tuple(row)).content_hash()
-
-        assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT * FROM provenance WHERE status = 'active' ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
-        if not row:
-            return self.GENESIS_HASH
-        return self._row_to_entry(row).content_hash()
+    def _read_chain_tip(self) -> tuple[str | None, str]:
+        """(id, content hash) of the newest active entry; (None, genesis) for an empty chain."""
+        entries = self._select("status = 'active'", {}, "timestamp DESC, id DESC", 1)
+        if not entries:
+            return None, self.GENESIS_HASH
+        return entries[0].id, entries[0].content_hash()
 
     @staticmethod
     def _row_to_entry(row: tuple[Any, ...]) -> ProvenanceEntry:

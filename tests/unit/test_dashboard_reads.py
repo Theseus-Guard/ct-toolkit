@@ -1,4 +1,3 @@
-import pytest
 
 import sqlite3
 import time
@@ -89,7 +88,8 @@ def test_tool_call_api_serves_repeat_reads_from_the_cache(tmp_path):
     _tool(log)
     server._read_cache.clear()
     client = TestClient(app)
-    with patch.object(server, "query_page", wraps=server.query_page) as spy:
+    # The generation is re-read at most once per interval; zero it so the write below shows at once.
+    with patch.object(server, "GENERATION_CHECK_INTERVAL_S", 0.0), patch.object(server, "query_page", wraps=server.query_page) as spy:
         assert client.get("/api/dashboard/tool-calls").status_code == 200
         assert client.get("/api/dashboard/tool-calls").status_code == 200
         assert spy.call_count == 1  # second read: no write in between, served from the cache
@@ -123,3 +123,15 @@ def test_full_verify_interval_option_is_on_serve_and_dashboard():
     for command in (["serve"], ["dashboard"]):
         result = CliRunner().invoke(app, command + ["--help"], env={"COLUMNS": "200"})
         assert "--full-verify-interval" in result.output
+
+
+def test_generation_is_read_at_most_once_per_interval(tmp_path):
+    import ct_toolkit.server as server
+
+    log = ProvenanceLog(vault_path=str(tmp_path / "g.db"))
+    with patch.object(server, "GENERATION_CHECK_INTERVAL_S", 60.0):
+        server._generation_seen.pop(id(log), None)
+        with patch.object(log, "generation", return_value=7) as read:
+            assert server._generation(log) == 7
+            assert server._generation(log) == 7
+            assert read.call_count == 1
