@@ -90,11 +90,13 @@ def test_staged_approval_critical_failure(mock_litellm, mock_embedding):
     commitment = next(c for c in wrapper.kernel.commitments if c.id == "harm_avoidance_level")
     assert commitment.current_value != "allow harmful content generation"
 
-def test_cooldown_penalty_no_probes(mock_litellm):
+def test_cooldown_penalty_no_probes(mock_litellm, tmp_path):
     """Verify that missing probes adds a penalty to cooldown."""
+    # Own vault: the traffic term of the cooldown counts entries in the vault, so a shared one makes this flaky.
     config = WrapperConfig(
         endorsement_cooldown_base=100,
-        endorsement_no_probe_penalty=50
+        endorsement_no_probe_penalty=50,
+        vault_path=str(tmp_path / "ct_provenance.db"),
     )
     wrapper = TheseusWrapper(config=config)
     
