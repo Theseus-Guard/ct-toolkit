@@ -16,7 +16,7 @@ OpenCode's built-in Bedrock provider talks the Bedrock Converse protocol directl
 Your AWS session must be valid for LiteLLM to call Bedrock:
 
 ```bash
-aws login --profile theseus-guard
+aws login --profile <your-profile>
 ```
 
 ## 2. Start the chain
@@ -25,7 +25,7 @@ The example files are in `examples/opencode-bedrock/`:
 
 ```bash
 cd examples/opencode-bedrock
-CT_MODE=observe ./start.sh
+CT_AWS_PROFILE=<your-profile> CT_MODE=observe ./start.sh
 ```
 
 This starts three processes and prints their addresses:
@@ -46,7 +46,7 @@ Add the provider from `examples/opencode-bedrock/opencode.json` to your OpenCode
 "provider": {
   "ct-bedrock": {
     "npm": "@ai-sdk/openai-compatible",
-    "options": { "baseURL": "http://127.0.0.1:8788/v1", "apiKey": "unused" },
+    "options": { "baseURL": "http://127.0.0.1:8788/v1", "apiKey": "<the value of examples/opencode-bedrock/.litellm_master_key>" },
     "models": { "global.openai.gpt-6-luna": { "name": "GPT-6 Luna (Bedrock, guarded)", "tool_call": true } }
   }
 }
@@ -56,19 +56,20 @@ and `"model": "ct-bedrock/global.openai.gpt-6-luna"`. Use the same Bedrock model
 
 ## 4. See the records
 
-Work in OpenCode as usual, then open the dashboard. The **Tool calls** section lists every tool call the model asked for, with its verdict (`passed`, `flagged`, `blocked`), the findings and the model. Filter by verdict or tool, and sort by any column.
+Work in OpenCode as usual, then open the dashboard. The **Provenance Chain Ledger** lists every request that passed through the proxy: model requests as model turns, other API calls as API calls, and each tool call the model asked for, with its verdict (`passed`, `flagged`, `blocked`) and findings. Filter by kind, search, and sort by time, kind or score. The **Tool calls** section shows the tool-call decisions alone, with filters by verdict and tool.
 
 The **Tool-Call Guard Settings** panel changes the mode without a restart: the proxy reads the settings file on every request. Enforce mode removes high-severity calls before OpenCode runs them.
 
 ## What is recorded, and what is not
 
-- **Recorded:** each tool-call decision, with the tool name, verdict, mode, findings and model. The call's arguments are not stored; the chain keeps only their hash.
-- **Not recorded yet:** plain model turns (prompt and answer without tool calls) and identity drift. Drift is measured by the library's `TheseusWrapper`, which the proxy does not wrap. Recording model turns through the proxy is a possible next step.
+- **Recorded:** every request that passes through the proxy. A model request gets one entry with its endpoint, status, finish reason and number of tool calls, including a plain answer or a refusal. Any other request, such as a model listing, gets an entry with its method, endpoint and status.
+- **Recorded:** each tool-call decision, with the tool name, verdict, mode, findings, endpoint and model. The call's arguments are not stored; the chain keeps only their hash. The model's text is hashed the same way.
+- **Not recorded yet:** identity drift. Drift is measured by the library's `TheseusWrapper`, which the proxy does not wrap.
 
 ## Verification status
 
 - The proxy, the dashboard and the shared vault were tested end to end with a stand-in OpenAI-compatible upstream that streams tool calls, including a risky one. The risky call was flagged and recorded, and it appeared in the dashboard API.
-- The Bedrock leg (LiteLLM with your AWS profile) has not been run in this repository, because it needs a valid AWS session. Run `start.sh` once and check the LiteLLM log for the first request.
+- The Bedrock leg was run with a valid AWS session. A plain request and a request that asks for a tool call both returned Bedrock responses through the chain. The tool call was recorded in the dashboard with the verdict `passed`.
 
 ## Enforce mode with OpenCode
 
