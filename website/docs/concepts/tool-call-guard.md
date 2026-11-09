@@ -68,7 +68,7 @@ A judge model can review the calls that the scanner flagged with findings below 
 - **Failure handling:** if the judge gives no usable answer, the call is not blocked by default (fail-open). The error is kept in the judge field of the audit record. With fail-closed on (`tool_guard_judge_fail_closed=True` in the library, or `--tool-guard-judge-fail-closed` for `serve` and `proxy`) the call gets a HIGH `judge.unavailable` finding and is blocked in enforce mode.
 
 ```bash
-ct-toolkit proxy --upstream https://api.openai.com/v1 \
+ct-toolkit proxy --upstream https://api.openai.com \
   --tool-guard-judge-model openai/gemma-4-E4B-it \
   --tool-guard-judge-api-base http://localhost:11434/v1
 ```

@@ -3,7 +3,8 @@ ct_toolkit.proxy
 ----------------
 A local reverse proxy between an agent harness and its model API. Point the harness's base
 URL at the proxy and nothing else changes. Every model response's tool calls go through the
-ToolGuard, and each verdict goes into the provenance chain.
+ToolGuard, and each verdict goes into the provenance chain. A successful response without tool calls
+(a plain answer or a refusal) is recorded as one model-turn entry: its text is hashed, not stored.
 
 Reviewed: OpenAI Chat Completions and Anthropic Messages bodies (anything with `messages`).
 Everything else is passed through untouched.
@@ -31,9 +32,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from ct_toolkit.core.tool_guard import ToolCallDecision, ToolGuard, ToolGuardMode, without_calls
+from ct_toolkit.core.tool_guard import ToolCallDecision, ToolGuard, ToolGuardMode, tool_calls_of, without_calls
 from ct_toolkit.core.tool_guard_settings import SettingsWatcher, apply_to_guard
-from ct_toolkit.provenance.log import ProvenanceLog
+from ct_toolkit.provenance.log import API_CALL_EVENT, MODEL_TURN_EVENT, ProvenanceLog
 from ct_toolkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -81,11 +82,17 @@ class StreamToolCalls:
         self._openai: dict[int, dict[str, Any]] = {}
         self._anthropic: dict[int, dict[str, Any]] = {}
         self._responses: dict[int, dict[str, Any]] = {}
+        self._text: list[str] = []
+        self.finish: Optional[str] = None  # the finish reason the stream ends with, if it says
 
     def feed(self, line: str) -> None:
         """Feeds one SSE line; only `data:` lines carry tool calls."""
         if line.startswith("data:"):
             self.feed_event(_json_or_none(line[len("data:") :].strip()))
+
+    def text(self) -> str:
+        """The text the model streamed, without tool-call arguments."""
+        return "".join(self._text)
 
     def feed_event(self, event: Any) -> None:
         if not isinstance(event, dict):
@@ -99,6 +106,14 @@ class StreamToolCalls:
             delta = event["delta"]
             if delta.get("type") == "input_json_delta" and event.get("index") in self._anthropic:
                 self._anthropic[event["index"]]["input"] += delta.get("partial_json") or ""
+            elif delta.get("type") == "text_delta":
+                self._text.append(delta.get("text") or "")
+        elif kind == "message_delta" and isinstance(event.get("delta"), dict):
+            self.finish = event["delta"].get("stop_reason") or self.finish
+        elif kind == "response.output_text.delta":
+            self._text.append(event.get("delta") or "")
+        elif kind in ("response.completed", "response.incomplete") and isinstance(event.get("response"), dict):
+            self.finish = event["response"].get("status") or self.finish
         elif kind == "response.output_item.added" and (event.get("item") or {}).get("type") == "function_call":
             item = event["item"]
             self._responses[event.get("output_index", 0)] = {
@@ -109,7 +124,13 @@ class StreamToolCalls:
         elif kind == "response.function_call_arguments.delta" and event.get("output_index") in self._responses:
             self._responses[event["output_index"]]["arguments"] += event.get("delta") or ""
         for choice in event.get("choices") or []:
-            for call in ((choice or {}).get("delta") or {}).get("tool_calls") or []:
+            choice = choice or {}
+            delta = choice.get("delta") or {}
+            if isinstance(delta.get("content"), str):
+                self._text.append(delta["content"])
+            if choice.get("finish_reason"):
+                self.finish = choice["finish_reason"]
+            for call in delta.get("tool_calls") or []:
                 slot = self._openai.setdefault(call.get("index", 0), {"id": None, "name": "", "arguments": ""})
                 slot["id"] = call.get("id") or slot["id"]
                 function = call.get("function") or {}
@@ -160,6 +181,30 @@ def _json_or_none(text: str) -> Any:
         return json.loads(text)
     except ValueError:
         return None
+
+
+def response_turn(response: Any) -> tuple[str, Optional[str]]:
+    """The text and the finish reason of a model response, in Chat Completions, Messages or Responses shape."""
+    if not isinstance(response, dict):
+        return "", None
+    choices = response.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        return (content if isinstance(content, str) else ""), choices[0].get("finish_reason")
+    if isinstance(response.get("content"), list):
+        text = "".join(b.get("text") or "" for b in response["content"] if isinstance(b, dict) and b.get("type") == "text")
+        return text, response.get("stop_reason")
+    if isinstance(response.get("output"), list):
+        parts = [
+            part.get("text") or ""
+            for item in response["output"]
+            if isinstance(item, dict) and item.get("type") == "message"
+            for part in item.get("content") or []
+            if isinstance(part, dict) and part.get("type") == "output_text"
+        ]
+        return "".join(parts), response.get("status")
+    return "", None
 
 
 def _parse_event(lines: list[str]) -> tuple[str, Any]:
@@ -263,7 +308,7 @@ class ProxyReviewer:
         self.guard = guard
         self.provenance = provenance
 
-    def review(self, request: dict, response: Any) -> list[ToolCallDecision]:
+    def review(self, request: dict, response: Any, endpoint: str = "") -> list[ToolCallDecision]:
         conversation, task = request_context(request)
         decisions = self.guard.review(response, tools=request.get("tools"), conversation=conversation, task=task)
         model = str(request.get("model") or "")
@@ -272,12 +317,44 @@ class ProxyReviewer:
                 self.provenance.record(
                     request_text=task,
                     response_text=f"{decision.call.name}({decision.call.arguments})",
-                    metadata=decision.audit_metadata("proxy", model),
+                    metadata={**decision.audit_metadata("proxy", model), "endpoint": endpoint},
                 )
         return decisions
 
     def blocked_indexes(self, decisions: list[ToolCallDecision]) -> set[int]:
         return {decision.index for decision in decisions if decision.blocked}
+
+    def record_turn(
+        self, request: dict, response: Any, text: str, finish_reason: Optional[str], endpoint: str, status: int
+    ) -> None:
+        """One entry per model request: its status, finish reason and tool-call count. The text is hashed, not stored.
+        The tool calls themselves are recorded one by one by `review`."""
+        if self.provenance is None:
+            return
+        _, task = request_context(request)
+        calls = tool_calls_of(response) if isinstance(response, dict) else []
+        self.provenance.record(
+            request_text=task,
+            response_text=text,
+            metadata={
+                "event": MODEL_TURN_EVENT,
+                "endpoint": endpoint,
+                "status": status,
+                "finish_reason": finish_reason or "",
+                "tool_calls": len(calls),
+                "provider": "proxy",
+                "llm_model": str(request.get("model") or ""),
+            },
+        )
+
+    def record_call(self, method: str, endpoint: str, status: int) -> None:
+        """One entry per request that is not a model request, such as a model listing or a token count."""
+        if self.provenance is not None:
+            self.provenance.record(
+                request_text="",
+                response_text="",
+                metadata={"event": API_CALL_EVENT, "method": method, "endpoint": endpoint, "status": status, "provider": "proxy"},
+            )
 
 
 def is_model_turn(path: str, body: Any) -> bool:
@@ -312,6 +389,7 @@ def create_app(
         except ValueError:
             request_json = None
         review = is_model_turn(request.url.path, request_json)
+        endpoint = request.url.path
 
         url = upstream + request.url.path
         if request.url.query:
@@ -323,6 +401,10 @@ def create_app(
             upstream_response = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as e:
             logger.warning(f"upstream error: {e}")
+            if review:
+                await asyncio.to_thread(reviewer.record_turn, request_json, {}, "", None, endpoint, 502)
+            else:
+                await asyncio.to_thread(reviewer.record_call, request.method, endpoint, 502)
             return JSONResponse({"error": {"type": "upstream_error", "message": str(e)}}, status_code=502)
 
         response_headers = {
@@ -330,30 +412,35 @@ def create_app(
         }
         close = BackgroundTask(upstream_response.aclose)
         is_sse = upstream_response.headers.get("content-type", "").startswith("text/event-stream")
+        status = upstream_response.status_code
 
         if not review:
-            return StreamingResponse(upstream_response.aiter_bytes(), upstream_response.status_code, response_headers, background=close)
+            await asyncio.to_thread(reviewer.record_call, request.method, endpoint, status)
+            return StreamingResponse(upstream_response.aiter_bytes(), status, response_headers, background=close)
 
         if is_sse:
             if guard.mode is ToolGuardMode.ENFORCE:
-                stream = _enforced_stream(upstream_response, request_json, reviewer)
+                stream = _enforced_stream(upstream_response, request_json, reviewer, endpoint)
             else:
-                stream = _observed_stream(upstream_response, request_json, reviewer)
-            return StreamingResponse(stream, upstream_response.status_code, response_headers, background=close)
+                stream = _observed_stream(upstream_response, request_json, reviewer, endpoint)
+            return StreamingResponse(stream, status, response_headers, background=close)
 
         data = await upstream_response.aread()
         await upstream_response.aclose()
         try:
             response_json = json.loads(data)
         except ValueError:
-            return Response(data, upstream_response.status_code, response_headers)
-        decisions = await asyncio.to_thread(reviewer.review, request_json, response_json)
+            await asyncio.to_thread(reviewer.record_turn, request_json, {}, "", None, endpoint, status)
+            return Response(data, status, response_headers)
+        decisions = await asyncio.to_thread(reviewer.review, request_json, response_json, endpoint)
+        text, finish = response_turn(response_json)
+        await asyncio.to_thread(reviewer.record_turn, request_json, response_json, text, finish, endpoint, status)
         blocked = reviewer.blocked_indexes(decisions)
         if blocked:
             logger.warning(f"tool guard removed {len(blocked)} call(s)")
             response_json = without_calls(response_json, blocked)
             data = json.dumps(response_json, ensure_ascii=False).encode()
-        return Response(data, upstream_response.status_code, response_headers)
+        return Response(data, status, response_headers)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -363,18 +450,21 @@ def create_app(
     return Starlette(routes=[Route("/{path:path}", forward, methods=METHODS)], lifespan=lifespan)
 
 
-async def _observed_stream(upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer) -> AsyncIterator[bytes]:
-    """Forwards the stream line by line as it arrives, then records the verdicts when it ends."""
+async def _observed_stream(upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer, endpoint: str) -> AsyncIterator[bytes]:
+    """Forwards the stream line by line as it arrives, then records the verdicts and the turn when it ends."""
     rebuilt = StreamToolCalls()
     async for line in upstream_response.aiter_lines():
         rebuilt.feed(line)
         yield (line + "\n").encode()
-    await asyncio.to_thread(reviewer.review, request, rebuilt.response())
+    await asyncio.to_thread(reviewer.review, request, rebuilt.response(), endpoint)
+    await asyncio.to_thread(
+        reviewer.record_turn, request, rebuilt.response(), rebuilt.text(), rebuilt.finish, endpoint, upstream_response.status_code
+    )
 
 
-async def _enforced_stream(upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer) -> AsyncIterator[bytes]:
+async def _enforced_stream(upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer, endpoint: str) -> AsyncIterator[bytes]:
     """Enforce mode: forwards text live, holds the events from the first tool call to the end, then drops the
-    blocked calls from them and forwards the rest."""
+    blocked calls from them and forwards the rest. The turn is recorded when the stream has ended."""
     rebuilt = StreamToolCalls()
     held: Optional[list[tuple[str, list[str], Any]]] = None
     async for lines in _sse_events(upstream_response):
@@ -387,10 +477,12 @@ async def _enforced_stream(upstream_response: httpx.Response, request: dict, rev
             held = []
         held.append((name, lines, data))
     await upstream_response.aclose()
+    status = upstream_response.status_code
     if held is None:
+        await asyncio.to_thread(reviewer.record_turn, request, rebuilt.response(), rebuilt.text(), rebuilt.finish, endpoint, status)
         return
 
-    decisions = await asyncio.to_thread(reviewer.review, request, rebuilt.response())
+    decisions = await asyncio.to_thread(reviewer.review, request, rebuilt.response(), endpoint)
     positions = reviewer.blocked_indexes(decisions)
     if positions:
         logger.warning(f"tool guard removed {len(positions)} call(s) from a stream")
@@ -401,3 +493,4 @@ async def _enforced_stream(upstream_response: httpx.Response, request: dict, rev
         kept = _drop_blocked(name, lines, data, blocked, calls_left)
         if kept is not None:
             yield ("\n".join(kept) + "\n\n").encode()
+    await asyncio.to_thread(reviewer.record_turn, request, rebuilt.response(), rebuilt.text(), rebuilt.finish, endpoint, status)

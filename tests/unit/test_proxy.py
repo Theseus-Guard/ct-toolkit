@@ -246,3 +246,96 @@ class TestResponsesApi:
         assert "pytest -q" in response.text
         assert "shell_exec" not in response.text
         assert [e["metadata"]["verdict"] for e in audit_entries(provenance)] == ["passed", "blocked"]
+
+
+def turn_entries(provenance):
+    return [e for e in provenance.export_log() if e["metadata"].get("event") == "model_turn"]
+
+
+class TestModelTurns:
+    def test_plain_json_answer_is_recorded_as_one_turn(self, tmp_path):
+        payload = {"id": "x", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi there"}, "finish_reason": "stop"}]}
+        client, provenance = make_client(tmp_path, json_handler(payload))
+        client.post("/v1/chat/completions", json=REQUEST)
+
+        entries = turn_entries(provenance)
+        assert len(entries) == 1
+        assert entries[0]["metadata"] == {
+            "event": "model_turn",
+            "endpoint": "/v1/chat/completions",
+            "status": 200,
+            "finish_reason": "stop",
+            "tool_calls": 0,
+            "provider": "proxy",
+            "llm_model": "gpt-4o-mini",
+        }
+        assert entries[0]["response_hash"] and entries[0]["divergence_score"] is None
+        assert audit_entries(provenance) == []
+
+    def test_response_with_tool_calls_is_one_turn_plus_one_entry_per_call(self, tmp_path):
+        client, provenance = make_client(tmp_path, json_handler(completion(GOOD_CALL)))
+        client.post("/v1/chat/completions", json=REQUEST)
+
+        turns = turn_entries(provenance)
+        assert [t["metadata"]["tool_calls"] for t in turns] == [1]
+        assert len(audit_entries(provenance)) == 1
+        assert audit_entries(provenance)[0]["metadata"]["endpoint"] == "/v1/chat/completions"
+
+    def test_upstream_error_is_recorded_with_its_status(self, tmp_path):
+        client, provenance = make_client(tmp_path, json_handler({"error": {"message": "throttled"}}, status=429))
+        client.post("/v1/chat/completions", json=REQUEST)
+
+        turns = turn_entries(provenance)
+        assert [(t["metadata"]["status"], t["metadata"]["finish_reason"]) for t in turns] == [(429, "")]
+
+    def test_model_listing_is_recorded_as_an_api_call(self, tmp_path):
+        client, provenance = make_client(tmp_path, json_handler({"data": []}))
+        client.get("/v1/models")
+
+        calls = [e for e in provenance.export_log() if e["metadata"].get("event") == "api_call"]
+        assert [c["metadata"] for c in calls] == [{"event": "api_call", "method": "GET", "endpoint": "/v1/models", "status": 200, "provider": "proxy"}]
+        assert turn_entries(provenance) == []
+
+    @pytest.mark.parametrize("mode", ["observe", "enforce"])
+    def test_openai_text_stream_is_recorded_with_its_finish_reason(self, tmp_path, mode):
+        events = [
+            {"choices": [{"delta": {"role": "assistant", "content": "Hel"}}]},
+            {"choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}]},
+        ]
+        client, provenance = make_client(tmp_path, sse_handler(sse(*events)), mode)
+        client.post("/v1/chat/completions", json={**REQUEST, "stream": True})
+
+        entries = turn_entries(provenance)
+        assert len(entries) == 1
+        assert entries[0]["metadata"]["finish_reason"] == "stop"
+
+    def test_anthropic_text_stream_is_recorded(self, tmp_path):
+        events = [
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Done."}},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+        ]
+        client, provenance = make_client(tmp_path, sse_handler(sse(*events)), "enforce")
+        client.post("/v1/messages", json={**REQUEST, "stream": True})
+
+        entries = turn_entries(provenance)
+        assert len(entries) == 1
+        assert entries[0]["metadata"]["finish_reason"] == "end_turn"
+
+    def test_responses_api_plain_message_is_recorded(self, tmp_path):
+        payload = {"id": "r", "object": "response", "status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "done"}]}]}
+        client, provenance = make_client(tmp_path, json_handler(payload))
+        client.post("/v1/responses", json=RESPONSES_REQUEST)
+
+        entries = turn_entries(provenance)
+        assert len(entries) == 1
+        assert entries[0]["metadata"]["finish_reason"] == "completed"
+
+    def test_turns_stay_out_of_divergence_figures_and_tool_call_listing(self, tmp_path):
+        payload = {"id": "x", "choices": [{"index": 0, "message": {"role": "assistant", "content": "no"}, "finish_reason": "stop"}]}
+        client, provenance = make_client(tmp_path, json_handler(payload))
+        client.post("/v1/chat/completions", json=REQUEST)
+
+        assert len(turn_entries(provenance)) == 1
+        assert provenance.recent_entries(None) == []
+        assert provenance.tool_call_page(page=1, page_size=10)[1] == 0
