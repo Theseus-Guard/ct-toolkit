@@ -116,13 +116,15 @@ def test_entries_without_tier_or_score_are_not_counted_as_ok(tmp_path):
 
 
 def test_full_verify_interval_option_is_on_serve_and_dashboard():
-    from typer.testing import CliRunner
+    # Read the option from the command definition: help output depends on the terminal width and colour.
+    from typer.main import get_command
 
     from ct_toolkit.cli import app
 
-    for command in (["serve"], ["dashboard"]):
-        result = CliRunner().invoke(app, command + ["--help"], env={"COLUMNS": "200"})
-        assert "--full-verify-interval" in result.output
+    group = get_command(app)
+    for command in ("serve", "dashboard"):
+        options = {opt for param in group.commands[command].params for opt in param.opts}
+        assert "--full-verify-interval" in options
 
 
 def test_generation_is_read_at_most_once_per_interval(tmp_path):
