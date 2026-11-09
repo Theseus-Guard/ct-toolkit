@@ -194,10 +194,15 @@ async def _handle_post_call(request: GuardrailRequest) -> GuardrailResponse:
     if request.structured_messages is not None:
         user_text = _extract_user_text(request.structured_messages)
 
+    # Before the text check: a response can consist of tool calls alone.
+    tool_block_reason = _review_guardrail_tool_calls(request, user_text)
+    if tool_block_reason:
+        return GuardrailResponse(action="BLOCKED", blocked_reason=tool_block_reason)
+
     response_text = ""
     if request.texts is not None:
         response_text = " ".join(request.texts)
-    
+
     if not response_text:
         return GuardrailResponse(action="NONE")
 
@@ -245,6 +250,23 @@ async def _handle_post_call(request: GuardrailRequest) -> GuardrailResponse:
         )
 
     return GuardrailResponse(action="NONE")
+
+def _review_guardrail_tool_calls(request: GuardrailRequest, user_text: str) -> Optional[str]:
+    """Runs the tool-call guard on a response's tool calls. Returns a block reason in enforce mode.
+    The guardrail API can only block the whole response, not single calls."""
+    if not request.tool_calls:
+        return None
+    raw_response = {"choices": [{"message": {"tool_calls": request.tool_calls}}]}
+    model = str((request.request_data or {}).get("model") or "unknown")
+    _, decisions = _wrapper_instance._review_tool_calls(
+        raw_response, user_text, None, None, model, {"tools": request.tools}
+    )
+    blocked = [decision for decision in decisions if decision.blocked]
+    if not blocked:
+        return None
+    reasons = "; ".join(f"{d.call.name}: {', '.join(str(f) for f in d.findings)}" for d in blocked)
+    logger.warning(f"Tool guard blocked response (call_id={request.litellm_call_id}): {reasons}")
+    return f"Tool guard: {reasons}"
 
 def _extract_user_text(messages: List[Dict[str, Any]]) -> str:
     """Extract non-system message content from messages list."""
