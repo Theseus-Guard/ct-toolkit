@@ -12,16 +12,17 @@ Chain verification: verify_chain() checks the log incrementally in batches.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
 import time
 import uuid
 import hmac
 import hashlib
 import sqlite3
-import threading
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Optional
 
 from ct_toolkit.core.exceptions import ChainIntegrityError, VaultError
 from ct_toolkit.utils.logger import get_logger
@@ -41,6 +42,63 @@ _SQLALCHEMY_URL_PREFIXES = (
     "mysql://",
     "mysql+",
 )
+
+
+TOOL_CALL_EVENT = "tool_call"
+# Columns copied out of metadata at write time, so queries can filter and sort without parsing JSON.
+DERIVED_COLUMNS = ("event", "verdict", "tool", "mode", "event_type")
+STAGED_EVENT_TYPES = ("staged_promotion", "reflective_endorsement")
+DIVERGENCE_TIERS = ("ok", "l1_warning", "l2_judge", "l3_icm")
+ENTRY_COLUMNS = (
+    "id, timestamp, request_hash, response_hash, divergence_score, metadata, prev_entry_hash, hmac_signature, status"
+)
+INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_provenance_status_ts ON provenance (status, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_provenance_event_ts ON provenance (event, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_provenance_event_verdict ON provenance (event, verdict)",
+    "CREATE INDEX IF NOT EXISTS idx_provenance_eventtype_ts ON provenance (event_type, timestamp)",
+)
+# Sort keys for tool-call listings. Keep in step with ct_toolkit.provenance.tool_calls.SORT_KEYS.
+TOOL_CALL_SORT = {
+    "time": "timestamp",
+    "tool": "LOWER(tool)",
+    "verdict": "CASE verdict WHEN 'passed' THEN 0 WHEN 'flagged' THEN 1 WHEN 'blocked' THEN 2 ELSE 3 END",
+    "mode": "mode",
+}
+FULL_VERIFY_INTERVAL_S = 300.0
+GENERATION_COUNTER = "meta:generation"  # bumped by every write and rollback: a cache key for readers
+DERIVED_MARKER = "meta:derived"
+_ADD_COUNTER = (
+    "INSERT INTO provenance_counters (name, value) VALUES (:name, :value) "
+    "ON CONFLICT (name) DO UPDATE SET value = provenance_counters.value + excluded.value"
+)
+_INSERT_ENTRY = (
+    "INSERT INTO provenance (id, timestamp, request_hash, response_hash, divergence_score, metadata, "
+    "prev_entry_hash, hmac_signature, status, event, verdict, tool, mode, event_type) VALUES (:id, :timestamp, "
+    ":request_hash, :response_hash, :divergence_score, :metadata, :prev_entry_hash, :hmac_signature, "
+    ":status, :event, :verdict, :tool, :mode, :event_type)"
+)
+
+
+def resolve_tier(metadata: dict[str, Any], divergence_score: float | None) -> str:
+    """The divergence tier of an entry: its recorded tier, else the tier its score falls in."""
+    recorded = str(metadata.get("tier") or metadata.get("divergence_tier") or "").lower()
+    if recorded in DIVERGENCE_TIERS:
+        return recorded
+    if divergence_score is None:
+        return "ok"
+    if divergence_score >= 0.50:
+        return "l3_icm"
+    if divergence_score >= 0.30:
+        return "l2_judge"
+    if divergence_score >= 0.15:
+        return "l1_warning"
+    return "ok"
+
+
+def _escape_like(text: str) -> str:
+    """Escapes a user string for LIKE ... ESCAPE '!', lower-cased for case-insensitive matching."""
+    return text.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
 @dataclass
@@ -132,6 +190,16 @@ class ProvenanceLog:
             self._engine = self._init_sqlalchemy_db()
         else:
             self._conn = self._init_db()
+        self._verified_tip: dict[str, Any] | None = None
+        self._verified_at = 0.0
+        # Seconds between full verification passes. None uses FULL_VERIFY_INTERVAL_S.
+        self.full_verify_interval_s: float | None = None
+        self._verify_lock = threading.RLock()
+        self._status_lock = threading.Lock()
+        self._integrity: dict[str, Any] | None = None
+        self._verifier: threading.Thread | None = None
+        self._verifier_stop = threading.Event()
+        self._migrate()
 
         logger.info(
             f"ProvenanceLog initialized | vault={vault_path} | "
@@ -280,6 +348,7 @@ class ProvenanceLog:
         offset = 0
         total_verified = 0
         last_entry_id: str | None = None
+        last_timestamp: float | None = None
 
         while True:
             with self._lock:
@@ -299,6 +368,7 @@ class ProvenanceLog:
                     raise ChainIntegrityError(entry_id=entry.id)
                 expected_prev = entry.content_hash()
                 last_entry_id = entry.id
+                last_timestamp = entry.timestamp
                 total_verified += 1
 
             if len(batch) < batch_size:
@@ -309,17 +379,253 @@ class ProvenanceLog:
             "verified_count": total_verified,
             "next_offset": total_verified,
             "last_entry_id": last_entry_id,
+            "last_timestamp": last_timestamp,
             "last_content_hash": expected_prev,
         }
 
-    def entries_with_event(self, event: str) -> list[ProvenanceEntry]:
-        """Active entries whose metadata `event` equals `event`, oldest first.
+    # ── Derived data: schema, counters and queries ─────────────────────────────
 
-        Loads the whole active chain and filters in Python: fine for local vaults, not for very large
-        Postgres ones (a metadata index would be the fix there)."""
+    def _migrate(self) -> None:
+        """Adds the derived columns, indexes and counters table, and fills them once for older vaults."""
+        with self._lock, self._transaction() as run:
+            if self._dialect() == "sqlite":
+                existing = {row[1] for row in run("PRAGMA table_info(provenance)")}
+                for column in DERIVED_COLUMNS:
+                    if column not in existing:
+                        run(f"ALTER TABLE provenance ADD COLUMN {column} TEXT")
+            else:
+                for column in DERIVED_COLUMNS:
+                    run(f"ALTER TABLE provenance ADD COLUMN IF NOT EXISTS {column} TEXT")
+            run(
+                "CREATE TABLE IF NOT EXISTS provenance_counters "
+                "(name TEXT PRIMARY KEY, value DOUBLE PRECISION NOT NULL)"
+            )
+            for ddl in INDEX_DDL:
+                run(ddl)
+            if not run(f"SELECT name FROM provenance_counters WHERE name = '{DERIVED_MARKER}'"):
+                self._backfill_derived(run)
+                self._rebuild_counters(run)
+                run(_ADD_COUNTER, {"name": DERIVED_MARKER, "value": 1.0})
+
+    def _backfill_derived(self, run: Any) -> None:
+        for row_id, meta_raw in run("SELECT id, metadata FROM provenance"):
+            metadata = json.loads(meta_raw) if isinstance(meta_raw, str) else dict(meta_raw)
+            run(
+                "UPDATE provenance SET event = :event, verdict = :verdict, tool = :tool, mode = :mode WHERE id = :id",
+                {**self._derived(metadata), "id": row_id},
+            )
+
+    def _rebuild_counters(self, run: Any) -> None:
+        """Recomputes the tool-call counters from the active entries. Used on migration and after a rollback."""
+        run(f"DELETE FROM provenance_counters WHERE name NOT IN ('{DERIVED_MARKER}', '{GENERATION_COUNTER}')")
+        totals: dict[str, float] = {}
+        for (meta_raw,) in run("SELECT metadata FROM provenance WHERE status = 'active' AND event = :event",
+                               {"event": TOOL_CALL_EVENT}):
+            metadata = json.loads(meta_raw) if isinstance(meta_raw, str) else dict(meta_raw)
+            for name, delta in self._counter_deltas(metadata, +1):
+                totals[name] = totals.get(name, 0.0) + delta
+        for name, value in totals.items():
+            run(_ADD_COUNTER, {"name": name, "value": value})
+
+    def _select(
+        self,
+        where: str,
+        params: dict[str, Any],
+        order: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[ProvenanceEntry]:
+        sql = f"SELECT {ENTRY_COLUMNS} FROM provenance WHERE {where} ORDER BY {order}"
+        if limit is not None:
+            sql += " LIMIT :limit OFFSET :offset"
+            params = {**params, "limit": int(limit), "offset": int(offset)}
+        with self._transaction() as run:
+            rows = run(sql, params)
+        return [self._row_to_entry(tuple(row)) for row in rows]
+
+    def counters(self) -> dict[str, float]:
+        """Pre-computed tool-call counters (`tool:*`) and the schema marker (`meta:derived`)."""
+        with self._lock, self._transaction() as run:
+            return {name: float(value) for name, value in run("SELECT name, value FROM provenance_counters")}
+
+    def generation(self) -> int:
+        """Changes after every write or rollback made through this vault. A reader caches results per generation."""
+        with self._lock, self._transaction() as run:
+            rows = run(f"SELECT value FROM provenance_counters WHERE name = '{GENERATION_COUNTER}'")
+        return int(rows[0][0]) if rows else 0
+
+    def recent_entries(self, event: Optional[str] = None, limit: int = 25) -> list[ProvenanceEntry]:
+        """Newest active entries first. `event=None` gives the divergence entries (those without an event)."""
         with self._lock:
-            entries = self._load_all_entries(include_rolled_back=False)
-        return [entry for entry in entries if (entry.metadata or {}).get("event") == event]
+            if event is None:
+                return self._select("status = 'active' AND event IS NULL", {}, "timestamp DESC, id DESC", limit)
+            return self._select("status = 'active' AND event = :event", {"event": event}, "timestamp DESC, id DESC", limit)
+
+    def recent_staged_entries(self, limit: int = 500) -> list[ProvenanceEntry]:
+        """Newest staged-rule entries (promotions and staged endorsements), newest first."""
+        with self._lock:
+            return self._select(
+                "status = 'active' AND event_type IN (:promotion, :endorsement)",
+                {"promotion": STAGED_EVENT_TYPES[0], "endorsement": STAGED_EVENT_TYPES[1]},
+                "timestamp DESC, id DESC",
+                limit,
+            )
+
+    def tool_call_page(
+        self,
+        *,
+        verdict: Optional[str] = None,
+        tool: Optional[str] = None,
+        search: Optional[str] = None,
+        sort: str = "time",
+        order: str = "desc",
+        page: int = 1,
+        page_size: int = 25,
+    ) -> tuple[list[ProvenanceEntry], int, int, int]:
+        """(entries, total, page, pages) of tool-call entries, filtered, sorted and paged in the database.
+        The caller validates the sort, order, verdict and page size."""
+        if sort not in TOOL_CALL_SORT:
+            raise ValueError(f"unknown sort key {sort!r}")
+        where = ["status = 'active'", "event = :event"]
+        params: dict[str, Any] = {"event": TOOL_CALL_EVENT}
+        if verdict is not None:
+            where.append("verdict = :verdict")
+            params["verdict"] = verdict
+        if tool:
+            where.append("LOWER(tool) LIKE :tool ESCAPE '!'")
+            params["tool"] = f"%{_escape_like(tool)}%"
+        if search:
+            where.append("(LOWER(tool) LIKE :q ESCAPE '!' OR LOWER(metadata) LIKE :q ESCAPE '!')")
+            params["q"] = f"%{_escape_like(search)}%"
+        clause = " AND ".join(where)
+        direction = "ASC" if order == "asc" else "DESC"
+        with self._lock:
+            with self._transaction() as run:
+                total = int(run(f"SELECT COUNT(*) FROM provenance WHERE {clause}", params)[0][0])
+            pages = max(1, -(-total // page_size))
+            page = min(max(1, page), pages)
+            entries = self._select(
+                clause,
+                params,
+                f"{TOOL_CALL_SORT[sort]} {direction}, timestamp {direction}, id {direction}",
+                page_size,
+                (page - 1) * page_size,
+            )
+        return entries, total, page, pages
+
+    def find_tool_calls(self, id_prefix: str, limit: int = 2) -> list[ProvenanceEntry]:
+        """Active tool-call entries whose id starts with `id_prefix`."""
+        with self._lock:
+            return self._select(
+                "status = 'active' AND event = :event AND id LIKE :id ESCAPE '!'",
+                {"event": TOOL_CALL_EVENT, "id": f"{_escape_like(id_prefix)}%"},
+                "timestamp ASC",
+                limit,
+            )
+
+    def verify_incremental(self, batch_size: int = 500, force_full: bool = False) -> dict[str, Any]:
+        """Verifies the active chain from the last verified position. Only entries after that position are
+        checked, so a run costs the new entries, not the whole chain.
+
+        A full pass runs when there is no position yet, after a rollback, when `force_full` is set, or once every
+        FULL_VERIFY_INTERVAL_S seconds. The full pass also catches an entry written with a timestamp earlier
+        than the position. The chain lock is held per batch only, so writers are not blocked during a pass.
+        Raises ChainIntegrityError on a mismatch."""
+        with self._verify_lock:
+            tip = self._verified_tip
+            interval = self.full_verify_interval_s if self.full_verify_interval_s is not None else FULL_VERIFY_INTERVAL_S
+            due = force_full or tip is None or (time.monotonic() - self._verified_at) > interval
+            mode = "full" if due else "incremental"
+            try:
+                if due:
+                    checkpoint = self.get_chain_checkpoint(batch_size=batch_size)
+                    tip = {
+                        "timestamp": checkpoint["last_timestamp"] or 0.0,
+                        "id": checkpoint["last_entry_id"] or "",
+                        "hash": checkpoint["last_content_hash"],
+                        "count": checkpoint["verified_count"],
+                    }
+                    self._verified_at = time.monotonic()
+                assert tip is not None
+                while True:
+                    with self._lock:
+                        batch = self._select(
+                            "status = 'active' AND (timestamp > :ts OR (timestamp = :ts AND id > :id))",
+                            {"ts": tip["timestamp"], "id": tip["id"]},
+                            "timestamp ASC, id ASC",
+                            batch_size,
+                        )
+                    for entry in batch:
+                        expected = self._compute_hmac(entry.content_hash())
+                        if not hmac.compare_digest(entry.hmac_signature, expected) or entry.prev_entry_hash != tip["hash"]:
+                            raise ChainIntegrityError(entry_id=entry.id)
+                        tip = {
+                            "timestamp": entry.timestamp,
+                            "id": entry.id,
+                            "hash": entry.content_hash(),
+                            "count": tip["count"] + 1,
+                        }
+                    if len(batch) < batch_size:
+                        break
+            except ChainIntegrityError:
+                self._verified_tip = None
+                raise
+            self._verified_tip = tip
+        return {"verified_count": tip["count"], "last_content_hash": tip["hash"], "mode": mode}
+
+    def check_integrity(self) -> dict[str, Any]:
+        """Runs one verification and publishes the result for `integrity_status()`. Never raises on tampering."""
+        checked_at = time.time()
+        try:
+            result = self.verify_incremental()
+            status = {
+                "chain_ok": True,
+                "tampered_entry_id": None,
+                "verified_count": int(result["verified_count"]),
+                "last_hash": str(result["last_content_hash"]),
+                "mode": result["mode"],
+                "checked_at": checked_at,
+            }
+        except ChainIntegrityError as exc:
+            status = {
+                "chain_ok": False,
+                "tampered_entry_id": getattr(exc, "entry_id", str(exc)),
+                "verified_count": 0,
+                "last_hash": self.GENESIS_HASH,
+                "mode": "failed",
+                "checked_at": checked_at,
+            }
+        with self._status_lock:
+            self._integrity = status
+        return dict(status)
+
+    def integrity_status(self) -> Optional[dict[str, Any]]:
+        """The last published verification result, or None before the first check. Reads no rows."""
+        with self._status_lock:
+            return dict(self._integrity) if self._integrity is not None else None
+
+    def start_verifier(self, interval_s: float = 5.0) -> None:
+        """Runs `check_integrity()` in a daemon thread every `interval_s` seconds: cheap incremental checks, with
+        a full pass every FULL_VERIFY_INTERVAL_S. Calling it again while the thread runs does nothing."""
+        with self._status_lock:
+            if self._verifier is not None and self._verifier.is_alive():
+                return
+            self._verifier_stop.clear()
+            self._verifier = threading.Thread(
+                target=self._verifier_loop, args=(interval_s,), name="ct-provenance-verifier", daemon=True
+            )
+            self._verifier.start()
+
+    def stop_verifier(self) -> None:
+        self._verifier_stop.set()
+        verifier = self._verifier
+        if verifier is not None and verifier is not threading.current_thread():
+            verifier.join(timeout=5)
+
+    def _verifier_loop(self, interval_s: float) -> None:
+        while not self._verifier_stop.is_set():
+            self.check_integrity()
+            self._verifier_stop.wait(interval_s)
 
     def get_entries(self, limit: int = 100, include_rolled_back: bool = False) -> list[ProvenanceEntry]:
         """Returns up to `limit` entries ordered chronologically."""
@@ -468,46 +774,23 @@ class ProvenanceLog:
             if entry.metadata.get("agent_id") != agent_id:
                 raise ValueError("Entry does not belong to the specified agent.")
 
-            if self._use_sqlalchemy:
-                from sqlalchemy import text
-                try:
-                    with self._engine.begin() as conn:
-                        rows = conn.execute(
-                            text(
-                                "SELECT id, metadata FROM provenance "
-                                "WHERE timestamp > :ts AND status = 'active'"
-                            ),
-                            {"ts": entry.timestamp},
-                        ).fetchall()
-                        ids_to_rollback = []
-                        for r_id, meta_raw in rows:
-                            meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
-                            if meta.get("agent_id") == agent_id:
-                                ids_to_rollback.append(r_id)
-                        for r_id in ids_to_rollback:
-                            conn.execute(
-                                text("UPDATE provenance SET status = 'rolled_back' WHERE id = :id"),
-                                {"id": r_id},
-                            )
-                    logger.info(f"Provenance log rolled back for agent '{agent_id}' to entry '{entry_id}'")
-                    return
-                except Exception as e:
-                    raise VaultError(f"SQLAlchemy rollback error: {e}") from e
-
             try:
-                assert self._conn is not None
-                self._conn.execute(
-                    """
-                    UPDATE provenance
-                    SET status = 'rolled_back'
-                    WHERE timestamp > ? AND json_extract(metadata, '$.agent_id') = ?
-                    """,
-                    (entry.timestamp, agent_id),
-                )
-                self._conn.commit()
-                logger.info(f"Provenance log rolled back for agent '{agent_id}' to entry '{entry_id}'")
-            except sqlite3.Error as e:
-                raise VaultError(f"SQLite rollback error: {e}") from e
+                with self._transaction() as run:
+                    rows = run(
+                        "SELECT id, metadata FROM provenance WHERE timestamp > :ts AND status = 'active'",
+                        {"ts": entry.timestamp},
+                    )
+                    for row_id, meta_raw in rows:
+                        metadata = json.loads(meta_raw) if isinstance(meta_raw, str) else dict(meta_raw)
+                        if metadata.get("agent_id") == agent_id:
+                            run("UPDATE provenance SET status = 'rolled_back' WHERE id = :id", {"id": row_id})
+                    self._rebuild_counters(run)
+                    run(_ADD_COUNTER, {"name": GENERATION_COUNTER, "value": 1.0})
+            except Exception as e:
+                backend = "SQLAlchemy" if self._use_sqlalchemy else "SQLite"
+                raise VaultError(f"{backend} rollback error: {e}") from e
+            self._verified_tip = None
+            logger.info(f"Provenance log rolled back for agent '{agent_id}' to entry '{entry_id}'")
 
     # ── Database ──────────────────────────────────────────────────────────────
 
@@ -573,59 +856,84 @@ class ProvenanceLog:
         conn.commit()
         return conn
 
-    def _write_entry(self, entry: ProvenanceEntry) -> None:
+    def _dialect(self) -> str:
+        """"sqlite" for the sqlite3 backend, otherwise the SQLAlchemy dialect name (e.g. "postgresql")."""
+        return self._engine.dialect.name if self._use_sqlalchemy else "sqlite"
+
+    @contextlib.contextmanager
+    def _transaction(self) -> Iterator[Any]:
+        """One transaction. Yields `run(sql, params)`, which returns the rows of a SELECT (none otherwise)."""
         if self._use_sqlalchemy:
             from sqlalchemy import text
-            try:
-                with self._engine.begin() as conn:
-                    conn.execute(
-                        text("""
-                            INSERT INTO provenance
-                            (id, timestamp, request_hash, response_hash,
-                             divergence_score, metadata, prev_entry_hash, hmac_signature, status)
-                            VALUES (:id, :timestamp, :request_hash, :response_hash,
-                                    :divergence_score, :metadata, :prev_entry_hash, :hmac_signature, :status)
-                        """),
-                        {
-                            "id": entry.id,
-                            "timestamp": entry.timestamp,
-                            "request_hash": entry.request_hash,
-                            "response_hash": entry.response_hash,
-                            "divergence_score": entry.divergence_score,
-                            "metadata": json.dumps(entry.metadata),
-                            "prev_entry_hash": entry.prev_entry_hash,
-                            "hmac_signature": entry.hmac_signature,
-                            "status": entry.status,
-                        },
-                    )
-                return
-            except Exception as e:
-                raise VaultError(f"SQLAlchemy write error: {e}") from e
 
+            with self._engine.begin() as conn:
+
+                def run_sa(sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
+                    result = conn.execute(text(sql), params or {})
+                    return [tuple(row) for row in result.fetchall()] if result.returns_rows else []
+
+                yield run_sa
+            return
+
+        conn = self._conn
+        assert conn is not None
         try:
-            assert self._conn is not None
-            self._conn.execute(
-                """
-                INSERT INTO provenance
-                (id, timestamp, request_hash, response_hash,
-                 divergence_score, metadata, prev_entry_hash, hmac_signature, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    entry.id,
-                    entry.timestamp,
-                    entry.request_hash,
-                    entry.response_hash,
-                    entry.divergence_score,
-                    json.dumps(entry.metadata),
-                    entry.prev_entry_hash,
-                    entry.hmac_signature,
-                    entry.status,
-                ),
-            )
-            self._conn.commit()
-        except sqlite3.Error as e:
-            raise VaultError(f"SQLite write error: {e}") from e
+            yield lambda sql, params=None: conn.execute(sql, params or {}).fetchall()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    @staticmethod
+    def _derived(metadata: dict[str, Any]) -> dict[str, str | None]:
+        event_type = metadata.get("event_type")
+        event_type = None if event_type is None else str(event_type)
+        if metadata.get("event") is None:
+            return {"event": None, "verdict": None, "tool": None, "mode": None, "event_type": event_type}
+        return {
+            "event": str(metadata["event"]),
+            "verdict": str(metadata.get("verdict") or ""),
+            "tool": str(metadata.get("tool") or ""),
+            "mode": str(metadata.get("mode") or ""),
+            "event_type": event_type,
+        }
+
+    @staticmethod
+    def _counter_deltas(metadata: dict[str, Any], sign: int) -> list[tuple[str, float]]:
+        """Counter changes for one entry: sign +1 when it is written, -1 when it is rolled back.
+        Only tool-call decisions have counters; divergence figures are read from a bounded window."""
+        if metadata.get("event") != TOOL_CALL_EVENT:
+            return []
+        derived = ProvenanceLog._derived(metadata)
+        return [
+            ("tool:total", sign),
+            (f"tool:verdict:{derived['verdict']}", sign),
+            (f"tool:tool:{derived['tool']}", sign),
+        ]
+
+    def _write_entry(self, entry: ProvenanceEntry) -> None:
+        derived = self._derived(entry.metadata)
+        params = {
+            "id": entry.id,
+            "timestamp": entry.timestamp,
+            "request_hash": entry.request_hash,
+            "response_hash": entry.response_hash,
+            "divergence_score": entry.divergence_score,
+            "metadata": json.dumps(entry.metadata),
+            "prev_entry_hash": entry.prev_entry_hash,
+            "hmac_signature": entry.hmac_signature,
+            "status": entry.status,
+            **derived,
+        }
+        try:
+            with self._transaction() as run:
+                run(_INSERT_ENTRY, params)
+                for name, delta in self._counter_deltas(entry.metadata, +1):
+                    run(_ADD_COUNTER, {"name": name, "value": delta})
+                run(_ADD_COUNTER, {"name": GENERATION_COUNTER, "value": 1.0})
+        except Exception as e:
+            backend = "SQLAlchemy" if self._use_sqlalchemy else "SQLite"
+            raise VaultError(f"{backend} write error: {e}") from e
 
     def _load_entries_batch(
         self,

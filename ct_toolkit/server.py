@@ -10,7 +10,6 @@ import hmac
 import os
 from pathlib import Path
 import re
-import sys
 import time
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -20,7 +19,9 @@ import uvicorn
 
 from ct_toolkit.core.wrapper import TheseusWrapper
 from ct_toolkit.provenance.log import ProvenanceLog
-from ct_toolkit.provenance.tool_calls import TOOL_CALL_EVENT, query_rows, rows_from_entries
+from ct_toolkit.provenance.log import DIVERGENCE_TIERS, resolve_tier
+from ct_toolkit.provenance.tool_calls import query_page
+from ct_toolkit.utils.cache import GenerationCache
 from ct_toolkit.utils.logger import get_logger
 from ct_toolkit.core.exceptions import (
     ConfigurationTamperingError,
@@ -39,7 +40,6 @@ _dashboard_vault_type: str = "local"
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 _DB_CREDENTIAL_RE = re.compile(r"(://[^:/?#\s]+:)([^@/?#\s]+)(@)")
 # LIMIT value meaning "every row": get_entries(limit) only ever returns the oldest `limit` rows.
-_ALL_ENTRIES = sys.maxsize
 
 _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
@@ -55,11 +55,13 @@ def configure_server_auth(api_key: Optional[str]) -> None:
     _server_api_key = api_key
 
 
-def configure_dashboard_vault(vault_path: str, vault_type: str = "local") -> None:
-    """Configures the Provenance Log vault inspected by the Web Audit Dashboard."""
-    global _dashboard_vault_path, _dashboard_vault_type
+def configure_dashboard_vault(vault_path: str, vault_type: str = "local", full_verify_interval_s: Optional[float] = None) -> None:
+    """Configures the Provenance Log vault inspected by the Web Audit Dashboard.
+    `full_verify_interval_s` sets how often a full chain verification runs (default: 300 s)."""
+    global _dashboard_vault_path, _dashboard_vault_type, _full_verify_interval_s
     _dashboard_vault_path = vault_path
     _dashboard_vault_type = vault_type
+    _full_verify_interval_s = full_verify_interval_s
 
 
 def _sanitize_vault_display(vault_path: str) -> str:
@@ -294,15 +296,113 @@ def _extract_response_text(response_obj: Any) -> str:
     return ""
 
 
+def _apply_integrity_settings(log: ProvenanceLog) -> None:
+    """Sets the full-pass interval and starts the background verifier on a log the dashboard reads."""
+    if _full_verify_interval_s is not None:
+        log.full_verify_interval_s = _full_verify_interval_s
+    log.start_verifier(DASHBOARD_POLL_INTERVAL_S)
+
+
+_dashboard_log_cache: Optional[tuple[tuple[str, str], ProvenanceLog]] = None
+DASHBOARD_POLL_INTERVAL_S = 5.0  # background integrity check interval
+_full_verify_interval_s: Optional[float] = None
+_read_cache = GenerationCache(maxsize=128, max_age_s=30.0)
+
+
 def _dashboard_log() -> ProvenanceLog:
-    """The provenance log the dashboard reads: the running wrapper's log, else the configured vault."""
+    """The provenance log the dashboard reads: the running wrapper's log, else the configured vault.
+    The vault's log is kept between polls, so its incremental integrity position survives."""
+    global _dashboard_log_cache
     if _wrapper_instance is not None and getattr(_wrapper_instance, "_provenance_log", None) is not None:
+        _apply_integrity_settings(_wrapper_instance._provenance_log)
         return _wrapper_instance._provenance_log
-    return ProvenanceLog(vault_type=_dashboard_vault_type, vault_path=_dashboard_vault_path)
+    key = (str(_dashboard_vault_type), str(_dashboard_vault_path))
+    if _dashboard_log_cache is None or _dashboard_log_cache[0] != key:
+        if _dashboard_log_cache is not None:
+            _dashboard_log_cache[1].stop_verifier()
+        _dashboard_log_cache = (key, ProvenanceLog(vault_type=_dashboard_vault_type, vault_path=_dashboard_vault_path))
+    _apply_integrity_settings(_dashboard_log_cache[1])
+    return _dashboard_log_cache[1]
+
+
+def _is_staged_record(meta: Dict[str, Any]) -> bool:
+    """Staged-rule bookkeeping (a promotion or a staged endorsement), not a divergence sample."""
+    return meta.get("event_type") == "staged_promotion" or (
+        meta.get("event_type") == "reflective_endorsement" and meta.get("decision") == "staged"
+    )
+
+
+def _telemetry_figures(log: ProvenanceLog, limit: int, active_kernel: str, active_template: str) -> Dict[str, Any]:
+    """Divergence figures, the ledger and the chart series, read from a bounded window of the newest entries."""
+    window_all = log.recent_entries(None, limit=limit)
+    scores = [e.divergence_score for e in window_all if e.divergence_score is not None]
+
+    promoted_ids: set[str] = set()
+    staged_records: List[Dict[str, Any]] = []
+    for entry in reversed(log.recent_staged_entries()):
+        meta = entry.metadata or {}
+        if meta.get("event_type") == "staged_promotion":
+            if meta.get("endorsement_id"):
+                promoted_ids.add(str(meta["endorsement_id"]))
+        elif _is_staged_record(meta):
+            staged_records.append(meta)
+
+    window = [e for e in window_all if not _is_staged_record(e.metadata or {})]
+    tier_counts: Dict[str, int] = {tier: 0 for tier in DIVERGENCE_TIERS}
+    for entry in window:
+        meta = entry.metadata or {}
+        recorded = str(meta.get("tier") or meta.get("divergence_tier") or "").lower()
+        # Only an entry with a known tier or a score is a sample of a tier; the rest is not counted.
+        if recorded in DIVERGENCE_TIERS or entry.divergence_score is not None:
+            tier_counts[resolve_tier(meta, entry.divergence_score)] += 1
+
+    ledger: List[Dict[str, Any]] = []
+    for entry in window[:25]:
+        meta = entry.metadata or {}
+        ledger.append(
+            {
+                "id": entry.id,
+                "timestamp": entry.timestamp,
+                "divergence_score": entry.divergence_score,
+                "tier": resolve_tier(meta, entry.divergence_score),
+                "kernel": str(meta.get("kernel", active_kernel)),
+                "template": str(meta.get("template", active_template)),
+                "model": str(meta.get("model", "unknown")),
+                "prev_entry_hash": entry.prev_entry_hash,
+                "content_hash": entry.content_hash(),
+                "hmac_signature": entry.hmac_signature,
+            }
+        )
+    # The score chart is drawn oldest to newest.
+    score_series: List[Dict[str, Any]] = [
+        {
+            "id": entry.id[:8],
+            "timestamp": entry.timestamp,
+            "score": round(float(entry.divergence_score), 4),
+            "tier": resolve_tier(entry.metadata or {}, entry.divergence_score),
+            "kernel": str((entry.metadata or {}).get("kernel", active_kernel)),
+            "model": str((entry.metadata or {}).get("model", "unknown")),
+        }
+        for entry in reversed(window)
+        if entry.divergence_score is not None
+    ]
+    return {
+        "entries_analyzed": len(window_all),
+        "avg_score": (sum(scores) / len(scores)) if scores else 0.0,
+        "max_score": max(scores) if scores else 0.0,
+        "tier_counts": tier_counts,
+        "score_series": score_series,
+        "recent_entries": ledger,
+        "promoted_ids": promoted_ids,
+        "staged_records": staged_records,
+    }
 
 
 def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
-    """Collects Provenance Chain integrity, L1/L2/L3 divergence metrics, and staged rules."""
+    """Collects Provenance Chain integrity, L1/L2/L3 divergence metrics, and staged rules.
+
+    Integrity comes from the background verifier (no rows are read for it). The figures are cached per vault
+    generation; staged-rule countdowns are computed on every call, since they depend on the clock."""
     if _wrapper_instance is not None and getattr(_wrapper_instance, "_provenance_log", None) is not None:
         log = _wrapper_instance._provenance_log
         vault_path = getattr(_wrapper_instance._config, "vault_path", _dashboard_vault_path)
@@ -312,114 +412,26 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
     else:
         vault_path = _dashboard_vault_path
         vault_type = _dashboard_vault_type
-        log = ProvenanceLog(vault_type=vault_type, vault_path=vault_path)
+        log = _dashboard_log()
         active_kernel = "general"
         active_template = "general"
 
-    chain_ok = True
-    tampered_entry_id: Optional[str] = None
-    verified_count = 0
-    last_hash = ProvenanceLog.GENESIS_HASH
-
-    try:
-        checkpoint = log.get_chain_checkpoint(batch_size=500)
-        verified_count = int(checkpoint["verified_count"])
-        last_hash = str(checkpoint["last_content_hash"])
-    except ChainIntegrityError as exc:
-        chain_ok = False
-        tampered_entry_id = getattr(exc, "entry_id", str(exc))
-
-    # get_entries(limit) returns the OLDEST rows. Load the whole active chain instead, drop tool-call
-    # decisions (not divergence entries), and keep the newest `limit` divergence entries, oldest first.
-    all_entries = log.get_entries(limit=_ALL_ENTRIES, include_rolled_back=False)
-    divergence_entries = [e for e in all_entries if (e.metadata or {}).get("event") != TOOL_CALL_EVENT]
-    entries = divergence_entries[max(len(divergence_entries) - limit, 0):]
-    scores = [e.divergence_score for e in entries if e.divergence_score is not None]
-    avg_score = (sum(scores) / len(scores)) if scores else 0.0
-    max_score = max(scores) if scores else 0.0
-
-    tier_counts: Dict[str, int] = {
-        "ok": 0,
-        "l1_warning": 0,
-        "l2_judge": 0,
-        "l3_icm": 0,
-    }
-    promoted_ids: set[str] = set()
-    staged_records: List[Dict[str, Any]] = []
-    score_series: List[Dict[str, Any]] = []
-    recent_entries: List[Dict[str, Any]] = []
-
-    for entry in entries:
-        meta = entry.metadata or {}
-        event_type = meta.get("event_type")
-        if event_type == "staged_promotion":
-            eid = meta.get("endorsement_id")
-            if eid:
-                promoted_ids.add(str(eid))
-            continue
-        if event_type == "reflective_endorsement" and meta.get("decision") == "staged":
-            staged_records.append(meta)
-            continue
-
-        raw_tier = str(meta.get("tier") or meta.get("divergence_tier") or "").lower()
-        resolved_tier = raw_tier
-        if raw_tier in tier_counts:
-            tier_counts[raw_tier] += 1
-        elif entry.divergence_score is not None:
-            if entry.divergence_score >= 0.50:
-                tier_counts["l3_icm"] += 1
-                resolved_tier = "l3_icm"
-            elif entry.divergence_score >= 0.30:
-                tier_counts["l2_judge"] += 1
-                resolved_tier = "l2_judge"
-            elif entry.divergence_score >= 0.15:
-                tier_counts["l1_warning"] += 1
-                resolved_tier = "l1_warning"
-            else:
-                tier_counts["ok"] += 1
-                resolved_tier = "ok"
-        else:
-            resolved_tier = "ok"
-
-        if entry.divergence_score is not None:
-            score_series.append(
-                {
-                    "id": entry.id[:8],
-                    "timestamp": entry.timestamp,
-                    "score": round(float(entry.divergence_score), 4),
-                    "tier": resolved_tier,
-                    "kernel": str(meta.get("kernel", active_kernel)),
-                    "model": str(meta.get("model", "unknown")),
-                }
-            )
-
-        recent_entries.append(
-            {
-                "id": entry.id,
-                "timestamp": entry.timestamp,
-                "divergence_score": entry.divergence_score,
-                "tier": resolved_tier,
-                "kernel": str(meta.get("kernel", active_kernel)),
-                "template": str(meta.get("template", active_template)),
-                "model": str(meta.get("model", "unknown")),
-                "prev_entry_hash": entry.prev_entry_hash,
-                "content_hash": entry.content_hash(),
-                "hmac_signature": entry.hmac_signature,
-            }
-        )
-
-    # entries are oldest -> newest, which is the order score_series is drawn in. The ledger shows newest first.
-    recent_entries.reverse()
-    del recent_entries[25:]
+    _apply_integrity_settings(log)
+    status = log.integrity_status() or log.check_integrity()
+    figures = _read_cache.get_or_compute(
+        ("telemetry", id(log), limit, active_kernel, active_template),
+        log.generation(),
+        lambda: _telemetry_figures(log, limit, active_kernel, active_template),
+    )
 
     now = time.time()
     staged_rules_out: List[Dict[str, Any]] = []
-    for s_meta in staged_records:
+    for s_meta in figures["staged_records"]:
         eid = str(s_meta.get("endorsement_id", "unknown"))
         commitment = str(s_meta.get("commitment_id", "unknown"))
         rule_text = str(s_meta.get("rule_text", ""))
         cooldown_until = s_meta.get("cooldown_until")
-        if eid in promoted_ids:
+        if eid in figures["promoted_ids"]:
             status_code = "PROMOTED"
             remaining_seconds = 0
         elif isinstance(cooldown_until, (int, float)) and now < cooldown_until:
@@ -443,20 +455,20 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
         "vault_type": str(vault_type),
         "active_kernel": active_kernel,
         "active_template": active_template,
-        "chain_ok": chain_ok,
-        "tampered_entry_id": tampered_entry_id,
-        "verified_count": verified_count,
-        "entries_analyzed": len(entries),
-        "last_hash": last_hash,
-        "avg_score": round(avg_score, 4),
-        "max_score": round(max_score, 4),
-        "tier_counts": tier_counts,
+        "chain_ok": bool(status["chain_ok"]),
+        "tampered_entry_id": status["tampered_entry_id"],
+        "verified_count": int(status["verified_count"]),
+        "entries_analyzed": figures["entries_analyzed"],
+        "last_hash": str(status["last_hash"]),
+        "integrity_checked_at": status["checked_at"],
+        "avg_score": round(figures["avg_score"], 4),
+        "max_score": round(figures["max_score"], 4),
+        "tier_counts": figures["tier_counts"],
         "staged_rules": staged_rules_out,
-        "score_series": score_series,
-        "recent_entries": recent_entries,
+        "score_series": figures["score_series"],
+        "recent_entries": figures["recent_entries"],
         "timestamp": now,
     }
-
 
 @app.get("/api/dashboard/status", dependencies=[Depends(_verify_api_key)])
 async def dashboard_status_api(limit: int = Query(200, ge=1, le=2000)) -> JSONResponse:
@@ -481,23 +493,26 @@ def dashboard_tool_calls_api(
 ) -> JSONResponse:
     """Paged, sorted and filtered guard tool-call decisions from the provenance vault."""
     try:
-        rows = rows_from_entries(_dashboard_log().entries_with_event(TOOL_CALL_EVENT))
-    except Exception as exc:
-        logger.error(f"Dashboard tool-calls API error: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to read provenance tool calls.")
-    try:
-        result = query_rows(
-            rows,
-            verdict=verdict,
-            tool=tool,
-            search=q,
-            sort=sort,
-            order=order,
-            page=page,
-            page_size=page_size,
+        log = _dashboard_log()
+        result = _read_cache.get_or_compute(
+            ("tool-calls", id(log), verdict, tool, q, sort, order, page, page_size),
+            log.generation(),
+            lambda: query_page(
+                log,
+                verdict=verdict,
+                tool=tool,
+                search=q,
+                sort=sort,
+                order=order,
+                page=page,
+                page_size=page_size,
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Dashboard tool-calls API error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to read provenance tool calls.")
     return JSONResponse(content=result.to_dict(), headers=_SECURITY_HEADERS)
 
 
@@ -1514,10 +1529,12 @@ def start_server(
     host: str,
     port: int,
     api_key: Optional[str] = None,
+    full_verify_interval_s: Optional[float] = None,
 ):
     """Inject wrapper and start uvicorn server."""
-    global _wrapper_instance
+    global _wrapper_instance, _full_verify_interval_s
     _validate_bind_security(host, api_key)
+    _full_verify_interval_s = full_verify_interval_s
     _wrapper_instance = wrapper
     if api_key is not None:
         configure_server_auth(api_key)
@@ -1531,10 +1548,11 @@ def start_dashboard_server(
     host: str = "127.0.0.1",
     port: int = 8001,
     api_key: Optional[str] = None,
+    full_verify_interval_s: Optional[float] = None,
 ) -> None:
     """Starts the standalone Web Audit & Telemetry Dashboard server."""
     _validate_bind_security(host, api_key)
-    configure_dashboard_vault(vault_path=vault_path, vault_type=vault_type)
+    configure_dashboard_vault(vault_path=vault_path, vault_type=vault_type, full_verify_interval_s=full_verify_interval_s)
     if api_key is not None:
         configure_server_auth(api_key)
     logger.info(f"Starting CT Toolkit Web Audit Dashboard on http://{host}:{port}/dashboard")

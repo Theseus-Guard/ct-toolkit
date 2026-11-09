@@ -34,7 +34,7 @@ from ct_toolkit.core.tool_guard import (
 )
 from ct_toolkit.divergence.l3_icm import ICMRunner
 from ct_toolkit.provenance.log import ProvenanceLog
-from ct_toolkit.provenance.tool_calls import SORT_KEYS, TOOL_CALL_EVENT, VERDICTS, query_rows, rows_from_entries, summarize
+from ct_toolkit.provenance.tool_calls import SORT_KEYS, VERDICTS, query_page, rows_from_entries, summary_from_counters
 from ct_toolkit.utils.trajectory_scrub import Scrubber
 from ct_toolkit.server import start_dashboard_server, start_server
 
@@ -209,6 +209,7 @@ def audit(
     if not report.is_healthy:
         raise typer.Exit(code=1)
 
+FULL_VERIFY_INTERVAL_DEFAULT_S = 300.0
 FAIL_CLOSED_HELP = "Block suspicious calls when the judge gives no usable answer (default: let them through)."
 
 def _parse_tool_guard_mode(value: str, param_hint: str) -> ToolGuardMode:
@@ -267,11 +268,11 @@ def tool_guard_check(
     if any(decision.severe for decision in decisions):
         raise typer.Exit(code=1)
 
-def _tool_call_rows(vault: Path):
+def _open_vault(vault: Path) -> ProvenanceLog:
     if not vault.is_file():
         console.print(f"[bold red]No vault at[/bold red] {vault}")
         raise typer.Exit(code=1)
-    return rows_from_entries(ProvenanceLog(vault_path=str(vault)).entries_with_event(TOOL_CALL_EVENT))
+    return ProvenanceLog(vault_path=str(vault))
 
 _VERDICT_COLORS = {"passed": "green", "flagged": "yellow", "blocked": "red"}
 
@@ -287,9 +288,9 @@ def tool_guard_list(
     page_size: int = typer.Option(25, "--page-size", min=1, max=200, help="Rows per page."),
 ):
     """Lists the tool-call decisions in a provenance vault, filtered, sorted and paged."""
-    rows = _tool_call_rows(vault)
+    log = _open_vault(vault)
     try:
-        result = query_rows(rows, verdict=verdict, tool=tool, search=search, sort=sort, order=order, page=page, page_size=page_size)
+        result = query_page(log, verdict=verdict, tool=tool, search=search, sort=sort, order=order, page=page, page_size=page_size)
     except ValueError as e:
         console.print(f"[bold red]{e}[/bold red]")
         raise typer.Exit(code=2)
@@ -324,7 +325,7 @@ def tool_guard_stats(
     vault: Path = typer.Option("./ct_provenance.db", "--vault", help="Provenance vault to read."),
 ):
     """Counts of tool-call decisions by verdict and by tool."""
-    summary = summarize(_tool_call_rows(vault))
+    summary = summary_from_counters(_open_vault(vault).counters())
     verdicts = Table(title="By verdict", show_header=True, header_style="bold magenta")
     verdicts.add_column("Verdict")
     verdicts.add_column("Count", justify="right")
@@ -346,7 +347,7 @@ def tool_guard_show(
     vault: Path = typer.Option("./ct_provenance.db", "--vault", help="Provenance vault to read."),
 ):
     """Shows one tool-call decision."""
-    matches = [row for row in _tool_call_rows(vault) if row.id.startswith(entry_id)]
+    matches = rows_from_entries(_open_vault(vault).find_tool_calls(entry_id, limit=2))
     if len(matches) != 1:
         console.print(f"[bold red]{len(matches)} records match {entry_id!r}; give a longer id.[/bold red]")
         raise typer.Exit(code=1)
@@ -396,6 +397,10 @@ def serve(
         None, "--tool-guard-judge-api-base", help="API base of the judge's OpenAI-compatible server, e.g. http://localhost:11434/v1."
     ),
     tool_guard_judge_fail_closed: bool = typer.Option(False, "--tool-guard-judge-fail-closed", help=FAIL_CLOSED_HELP),
+    full_verify_interval: float = typer.Option(
+        FULL_VERIFY_INTERVAL_DEFAULT_S, "--full-verify-interval", envvar="CT_FULL_VERIFY_INTERVAL", min=5.0,
+        help="Seconds between full chain verifications. Edits to old entries show within this time.",
+    ),
 ):
     """Start the CT-Toolkit Guardrail & Web Audit Server."""
     guard_mode = _parse_tool_guard_mode(tool_guard_mode, "--tool-guard-mode")
@@ -424,7 +429,7 @@ def serve(
         wrapper = TheseusWrapper(provider=judge_provider, config=config)
         
         # Start the uvicorn server
-        start_server(wrapper=wrapper, host=host, port=port, api_key=api_key)
+        start_server(wrapper=wrapper, host=host, port=port, api_key=api_key, full_verify_interval_s=full_verify_interval)
     except Exception as e:
         console.print(f"[bold red]Failed to start server:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -779,6 +784,10 @@ def dashboard_cmd(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the Web Dashboard server to (when --web is used)."),
     port: int = typer.Option(8001, "--port", help="Port to bind the Web Dashboard server to (when --web is used)."),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="Optional Bearer token / API key for dashboard API authentication."),
+    full_verify_interval: float = typer.Option(
+        FULL_VERIFY_INTERVAL_DEFAULT_S, "--full-verify-interval", envvar="CT_FULL_VERIFY_INTERVAL", min=5.0,
+        help="Seconds between full chain verifications (--web). Edits to old entries show within this time.",
+    ),
 ):
     """Display the terminal audit dashboard or launch the interactive Web Audit Dashboard (--web)."""
     if web:
@@ -791,6 +800,7 @@ def dashboard_cmd(
             host=host,
             port=port,
             api_key=api_key,
+            full_verify_interval_s=full_verify_interval,
         )
         return
     _render_status_dashboard(vault_path=vault_path, vault_type=vault_type, limit=limit)

@@ -7,10 +7,12 @@ import hashlib
 import hmac
 import json
 import sqlite3
+from unittest.mock import patch
 import time
 from pathlib import Path
 
 import pytest
+
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -309,6 +311,12 @@ def test_web_dashboard_ui_and_telemetry_api(tmp_path: Path) -> None:
             conn.execute("UPDATE provenance SET divergence_score = 0.88")
             conn.commit()
 
+        # The background verifier publishes the integrity result; here one full pass is run on demand, with the
+        # full-pass interval shortened so that it is due. The poll then reports what that pass found.
+        from ct_toolkit.server import _dashboard_log
+
+        with patch("ct_toolkit.provenance.log.FULL_VERIFY_INTERVAL_S", 0.0):
+            _dashboard_log().check_integrity()
         tampered_api = client.get("/api/dashboard/status")
         assert tampered_api.status_code == 200
         t_data = tampered_api.json()

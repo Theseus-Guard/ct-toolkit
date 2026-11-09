@@ -1,3 +1,4 @@
+
 from typer.testing import CliRunner
 
 from ct_toolkit.cli import app
@@ -53,7 +54,7 @@ def test_show_takes_a_unique_prefix(tmp_path):
     vault = _vault(tmp_path)
     rows = CliRunner().invoke(app, ["tool-guard", "list", "--vault", str(vault), "--verdict", "blocked"])
     assert rows.exit_code == 0
-    entry_id = ProvenanceLog(vault_path=str(vault)).entries_with_event("tool_call")[1].id
+    entry_id = ProvenanceLog(vault_path=str(vault)).tool_call_page(verdict="blocked")[0][0].id
     result = CliRunner().invoke(app, ["tool-guard", "show", entry_id[:12], "--vault", str(vault)])
     assert result.exit_code == 0
     assert "shell_exec" in result.output and "blocked" in result.output

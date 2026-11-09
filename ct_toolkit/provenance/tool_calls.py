@@ -1,23 +1,21 @@
 """
 ct_toolkit.provenance.tool_calls
 --------------------------------
-Reads the tool-call decisions the guard wrote to the provenance chain (metadata `event="tool_call"`) and
-turns them into rows: listed, filtered, sorted and paged. The CLI and the Web UI share this module, so both
-show the same rows for the same query.
+Reads the tool-call decisions the guard wrote to the provenance chain (metadata `event="tool_call"`) for the
+CLI and the Web UI. Filtering, sorting and paging run in the database, and the counts come from pre-computed
+counters, so a page costs the same however long the chain is.
 
 The chain stores hashes of the call text, not the text, so a row carries the tool name, verdict, findings
 and judge answer, but not the call's arguments.
 """
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Mapping, Optional
 
-from ct_toolkit.provenance.log import ProvenanceEntry
+from ct_toolkit.provenance.log import TOOL_CALL_EVENT, TOOL_CALL_SORT, ProvenanceEntry, ProvenanceLog
 
-TOOL_CALL_EVENT = "tool_call"
-SORT_KEYS = ("time", "tool", "verdict", "mode")
+SORT_KEYS = tuple(TOOL_CALL_SORT)
 VERDICTS = ("passed", "flagged", "blocked")
 MAX_PAGE_SIZE = 200
 
@@ -58,7 +56,7 @@ class ToolCallPage:
         }
 
 
-def rows_from_entries(entries: Iterable[ProvenanceEntry]) -> list[ToolCallRow]:
+def rows_from_entries(entries: list[ProvenanceEntry]) -> list[ToolCallRow]:
     """One row per tool-call entry. Entries of other kinds are skipped."""
     rows = []
     for entry in entries:
@@ -81,20 +79,32 @@ def rows_from_entries(entries: Iterable[ProvenanceEntry]) -> list[ToolCallRow]:
     return rows
 
 
-def summarize(rows: Iterable[ToolCallRow]) -> dict[str, Any]:
-    """Counts by verdict and by tool, over the rows given (not only the page shown)."""
-    rows = list(rows)
-    by_verdict = Counter(row.verdict for row in rows)
-    by_tool = Counter(row.tool for row in rows)
+def check_query(sort: str, order: str, verdict: Optional[str]) -> None:
+    """Raises ValueError for a sort key, order or verdict the listing does not know."""
+    if sort not in SORT_KEYS:
+        raise ValueError(f"sort must be one of {', '.join(SORT_KEYS)}")
+    if order not in ("asc", "desc"):
+        raise ValueError("order must be asc or desc")
+    if verdict is not None and verdict not in VERDICTS:
+        raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
+
+
+def summary_from_counters(counters: Mapping[str, float]) -> dict[str, Any]:
+    """Counts by verdict and by tool over all tool-call decisions, read from the pre-computed counters."""
+    by_tool = {
+        name[len("tool:tool:") :]: int(value)
+        for name, value in counters.items()
+        if name.startswith("tool:tool:") and value > 0
+    }
     return {
-        "total": len(rows),
-        "by_verdict": {verdict: by_verdict.get(verdict, 0) for verdict in VERDICTS},
-        "by_tool": dict(by_tool.most_common()),
+        "total": int(counters.get("tool:total", 0)),
+        "by_verdict": {verdict: int(counters.get(f"tool:verdict:{verdict}", 0)) for verdict in VERDICTS},
+        "by_tool": dict(sorted(by_tool.items(), key=lambda item: (-item[1], item[0]))),
     }
 
 
-def query_rows(
-    rows: Iterable[ToolCallRow],
+def query_page(
+    log: ProvenanceLog,
     *,
     verdict: Optional[str] = None,
     tool: Optional[str] = None,
@@ -104,54 +114,23 @@ def query_rows(
     page: int = 1,
     page_size: int = 25,
 ) -> ToolCallPage:
-    """Filters, sorts and pages the rows.
-
-    verdict: exact match (passed, flagged or blocked); tool: case-insensitive substring of the tool name;
-    search: case-insensitive substring of tool, findings, judge or model. Unknown sort keys and orders raise
-    ValueError, so callers can report them as bad input.
-    """
-    if sort not in SORT_KEYS:
-        raise ValueError(f"sort must be one of {', '.join(SORT_KEYS)}")
-    if order not in ("asc", "desc"):
-        raise ValueError("order must be asc or desc")
-    if verdict is not None and verdict not in VERDICTS:
-        raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
+    """One page of tool-call decisions. Raises ValueError for an unknown sort, order or verdict."""
+    check_query(sort, order, verdict)
     page_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
-    page = max(1, int(page))
-
-    rows = list(rows)
-    summary = summarize(rows)
-    selected = rows
-    if verdict is not None:
-        selected = [row for row in selected if row.verdict == verdict]
-    if tool:
-        needle = tool.lower()
-        selected = [row for row in selected if needle in row.tool.lower()]
-    if search:
-        needle = search.lower()
-        selected = [
-            row
-            for row in selected
-            if any(needle in text.lower() for text in (row.tool, row.findings, row.judge, row.llm_model))
-        ]
-
-    key = {
-        "time": lambda row: row.timestamp,
-        "tool": lambda row: row.tool.lower(),
-        "verdict": lambda row: VERDICTS.index(row.verdict) if row.verdict in VERDICTS else len(VERDICTS),
-        "mode": lambda row: row.mode,
-    }[sort]
-    selected = sorted(selected, key=key, reverse=(order == "desc"))
-
-    total = len(selected)
-    pages = max(1, -(-total // page_size))
-    page = min(page, pages)  # a page past the end shows the last page, with its rows
-    start = (page - 1) * page_size
+    entries, total, page, pages = log.tool_call_page(
+        verdict=verdict,
+        tool=tool,
+        search=search,
+        sort=sort,
+        order=order,
+        page=page,
+        page_size=page_size,
+    )
     return ToolCallPage(
-        items=selected[start : start + page_size],
+        items=rows_from_entries(entries),
         total=total,
         page=page,
         page_size=page_size,
         pages=pages,
-        summary=summary,
+        summary=summary_from_counters(log.counters()),
     )
