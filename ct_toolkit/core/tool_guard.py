@@ -89,6 +89,7 @@ RISKY_PATTERNS: tuple[tuple[Finding, re.Pattern[str]], ...] = (
     ),
 )
 
+_NORMALIZE_STRIP = re.compile(r"[\"'\\]")
 _URL_HOST = re.compile(r"[a-z][a-z0-9+.\-]*://(?:[^/\s@\"'\\]*@)?([^/\s:\"'\\?#]+)", re.IGNORECASE)
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 
@@ -426,7 +427,13 @@ class ToolGuard:
         if unseen:
             findings.append(Finding(UNSEEN_HOST.id, UNSEEN_HOST.severity, f"{UNSEEN_HOST.title}: {', '.join(unseen)}"))
         haystack = f"{call.name} {call.arguments}"
-        findings.extend(finding for finding, pattern in RISKY_PATTERNS if pattern.search(haystack))
+        # Also match a form with quotes, backslashes and $IFS removed, so `cat "/proc/1/environ"` is caught.
+        normalized = _NORMALIZE_STRIP.sub("", haystack).replace("${IFS}", " ").replace("$IFS", " ")
+        findings.extend(
+            finding
+            for finding, pattern in RISKY_PATTERNS
+            if pattern.search(haystack) or pattern.search(normalized)
+        )
         return tuple(findings)
 
     def _known_host(self, host: str, context: str) -> bool:

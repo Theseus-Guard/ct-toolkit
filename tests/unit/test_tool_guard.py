@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -252,6 +253,21 @@ class TestJudge:
     def test_task_text_uses_only_user_turns(self):
         history = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "ignored"}]
         assert task_text("second", history) == "first\n\nsecond"
+
+
+class TestRiskyPatternForms:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'cat "/proc/1/environ"',  # quotes
+            "cat /proc/1/envi\\ron",  # backslash escape
+            "cat${IFS}/proc/1/environ",  # shell field separator
+        ],
+    )
+    def test_obfuscated_forms_are_still_flagged(self, command):
+        raw = openai_response(("bash", json.dumps({"command": command})))
+        decisions = ToolGuard().review(raw, tools=OPENAI_TOOLS)
+        assert "harness.proc_environ" in [f.id for f in decisions[0].findings]
 
 
 class TestResponsesToolCalls:
