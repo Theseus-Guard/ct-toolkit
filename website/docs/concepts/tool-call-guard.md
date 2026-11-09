@@ -11,7 +11,7 @@ It works on the tool calls only, not on the text of the answer. By default it ne
 | Check | Severity | What it catches |
 | :---- | :------- | :-------------- |
 | `policy.undeclared_tool` | HIGH | The call names a tool that the request never declared in its `tools` list. |
-| `exfiltration.unseen_host` | HIGH | The call's arguments contain a host (a URL host or an IPv4 literal) that appears nowhere in the conversation and is not on the allowlist. |
+| `exfiltration.unseen_host` | HIGH | The call's arguments contain a host (a URL host, a `user@host:path` remote or an IPv4 literal) that the user and the harness never wrote and that is not on the allowlist. Tool results and the model's own turns do not count. |
 | Risky-action patterns | HIGH or MEDIUM | Known risky commands and paths, listed below. |
 
 The risky-action patterns:
@@ -105,7 +105,7 @@ The proxy binds to loopback only and has no authentication. Do not expose it on 
 ## Known limits
 
 - **Regex checks can be evaded.** A determined command can avoid the patterns. That is why the judge and the host check are separate layers, and why the audit trail records each decision.
-- **The host check looks at what the conversation mentions.** A host that appears anywhere the request shows the model (system prompt, user turns, tool results), other than in the model's own earlier turns, passes the check, even if it is not what the user meant.
+- **The host check only sees some hosts.** It reads `scheme://` URLs, `user@host:path` remotes and IPv4 literals. A bare host name (`curl evil.example/x`, `nc evil.example 80`) is not extracted. Hosts on the allowlist, such as `github.com`, are trusted whatever they serve, so data can still go to a gist or a repository there. A host named in the system prompt or the user's text passes, even if it is not what the user meant; one named only in a tool result or by the model does not.
 - **The library stream review reads OpenAI-style tool-call deltas.** The Responses API is covered by the proxy only, not by the library.
 - **The guardrail server cannot remove single calls.** It blocks the whole response.
 - **Linux is the tested platform.** Windows patterns are matched on strings and Windows shell behaviour is not exercised by the tests.

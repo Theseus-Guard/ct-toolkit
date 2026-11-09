@@ -27,12 +27,12 @@ from typing import Any, Optional
 
 import httpx
 from starlette.applications import Starlette
-from starlette.background import BackgroundTask
+from starlette.background import BackgroundTask, BackgroundTasks
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from ct_toolkit.core.tool_guard import ToolCallDecision, ToolGuard, ToolGuardMode, tool_calls_of, without_calls
+from ct_toolkit.core.tool_guard import ToolCallDecision, ToolGuard, ToolGuardMode, tool_calls_of, trusted_request, without_calls
 from ct_toolkit.core.tool_guard_settings import SettingsWatcher, apply_to_guard
 from ct_toolkit.provenance.log import API_CALL_EVENT, MODEL_TURN_EVENT, ProvenanceLog
 from ct_toolkit.utils.logger import get_logger
@@ -45,12 +45,10 @@ SKIP_RESPONSE = {"content-length", "content-encoding", "transfer-encoding", "con
 
 
 def request_context(request: dict) -> tuple[str, str]:
-    """(conversation, task) for a model-turn request. The conversation is everything but the model's own turns;
-    the task is the user's own text."""
-    context = dict(request)
-    if isinstance(context.get("messages"), list):
-        context["messages"] = [m for m in context["messages"] if not (isinstance(m, dict) and m.get("role") == "assistant")]
-    conversation = json.dumps(context, ensure_ascii=False)
+    """(conversation, task) for a model-turn request. The conversation is what the user and the harness wrote: the
+    model's own turns and the tool results are left out, because injected instructions arrive in them; the task is
+    the user's own text."""
+    conversation = json.dumps(trusted_request(request), ensure_ascii=False)
     if isinstance(request.get("input"), str):  # Responses API, plain text input
         return conversation, request["input"]
     task_parts = []
@@ -260,13 +258,23 @@ def _drop_blocked(name: str, lines: list[str], data: Any, blocked: Blocked, call
         return lines
     kind = data.get("type")
     changed = False
-    if kind in ("content_block_start", "content_block_delta", "content_block_stop") and data.get("index") in blocked.anthropic:
-        return None
+    if kind in ("content_block_start", "content_block_delta", "content_block_stop") and isinstance(data.get("index"), int):
+        if data["index"] in blocked.anthropic:
+            return None
+        shift = sum(1 for index in blocked.anthropic if index < data["index"])
+        if shift:  # clients place blocks by index, so the blocks after a removed one move up
+            data["index"] -= shift
+            changed = True
     if kind in ("response.output_item.added", "response.output_item.done") and (data.get("item") or {}).get("type") == "function_call":
         if data.get("output_index") in blocked.responses:
             return None
     if kind in ("response.function_call_arguments.delta", "response.function_call_arguments.done") and data.get("output_index") in blocked.responses:
         return None
+    if isinstance(data.get("output_index"), int) and kind and kind.startswith("response."):
+        shift = sum(1 for index in blocked.responses if index < data["output_index"])
+        if shift:
+            data["output_index"] -= shift
+            changed = True
     if kind == "response.completed" and isinstance(data.get("response"), dict):
         output = data["response"].get("output")
         if isinstance(output, list):
@@ -285,6 +293,11 @@ def _drop_blocked(name: str, lines: list[str], data: Any, blocked: Blocked, call
             kept_calls = [call for call in calls if call.get("index", 0) not in blocked.openai]
             if len(kept_calls) != len(calls):
                 changed = True
+            for call in kept_calls:
+                shift = sum(1 for index in blocked.openai if index < call.get("index", 0))
+                if shift:
+                    call["index"] = call.get("index", 0) - shift
+                    changed = True
             if kept_calls:
                 delta["tool_calls"] = kept_calls
             else:
@@ -421,9 +434,14 @@ def create_app(
         if is_sse:
             if guard.mode is ToolGuardMode.ENFORCE:
                 stream = _enforced_stream(upstream_response, request_json, reviewer, endpoint)
-            else:
-                stream = _observed_stream(upstream_response, request_json, reviewer, endpoint)
-            return StreamingResponse(stream, status, response_headers, background=close)
+                return StreamingResponse(stream, status, response_headers, background=close)
+            # Observe mode forwards the stream as it comes; the verdicts are recorded once the body has been sent,
+            # so a slow judge never holds the stream open.
+            observed = _ObservedStream(upstream_response, request_json, reviewer, endpoint)
+            tasks = BackgroundTasks()
+            tasks.add_task(upstream_response.aclose)
+            tasks.add_task(observed.record)
+            return StreamingResponse(observed.forward(), status, response_headers, background=tasks)
 
         data = await upstream_response.aread()
         await upstream_response.aclose()
@@ -450,16 +468,32 @@ def create_app(
     return Starlette(routes=[Route("/{path:path}", forward, methods=METHODS)], lifespan=lifespan)
 
 
-async def _observed_stream(upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer, endpoint: str) -> AsyncIterator[bytes]:
-    """Forwards the stream line by line as it arrives, then records the verdicts and the turn when it ends."""
-    rebuilt = StreamToolCalls()
-    async for line in upstream_response.aiter_lines():
-        rebuilt.feed(line)
-        yield (line + "\n").encode()
-    await asyncio.to_thread(reviewer.review, request, rebuilt.response(), endpoint)
-    await asyncio.to_thread(
-        reviewer.record_turn, request, rebuilt.response(), rebuilt.text(), rebuilt.finish, endpoint, upstream_response.status_code
-    )
+class _ObservedStream:
+    """Observe mode: `forward` passes the stream on line by line; `record` reviews what was seen and writes the
+    verdicts and the turn to the provenance chain."""
+
+    def __init__(self, upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer, endpoint: str) -> None:
+        self._upstream = upstream_response
+        self._request = request
+        self._reviewer = reviewer
+        self._endpoint = endpoint
+        self._rebuilt = StreamToolCalls()
+        self._complete = False
+
+    async def forward(self) -> AsyncIterator[bytes]:
+        async for line in self._upstream.aiter_lines():
+            self._rebuilt.feed(line)
+            yield (line + "\n").encode()
+        self._complete = True
+
+    async def record(self) -> None:
+        if not self._complete:
+            return
+        rebuilt = self._rebuilt
+        await asyncio.to_thread(self._reviewer.review, self._request, rebuilt.response(), self._endpoint)
+        await asyncio.to_thread(
+            self._reviewer.record_turn, self._request, rebuilt.response(), rebuilt.text(), rebuilt.finish, self._endpoint, self._upstream.status_code
+        )
 
 
 async def _enforced_stream(upstream_response: httpx.Response, request: dict, reviewer: ProxyReviewer, endpoint: str) -> AsyncIterator[bytes]:

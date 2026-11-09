@@ -162,3 +162,27 @@ def test_dashboard_markup_has_the_tool_guard_panel() -> None:
     # The existing endpoints stay in the page.
     assert "/api/dashboard/status" in html
     assert "/api/dashboard/tool-calls" in html
+
+
+class TestHostHeader:
+    """Without an API key the server answers loopback clients, but only under a loopback host name: a page on
+    another site that points its domain at 127.0.0.1 (DNS rebinding) sends its own name in the Host header."""
+
+    def test_a_foreign_host_name_is_refused(self, client):
+        for path in ("/api/dashboard/tool-guard", "/dashboard"):
+            assert client.get(path, headers={"Host": "attacker.example:8000"}).status_code == 403
+        assert client.put("/api/dashboard/tool-guard", json={"mode": "observe"}, headers={"Host": "attacker.example"}).status_code == 403
+        assert not _settings_file_exists(client)
+
+    @pytest.mark.parametrize("host", ["localhost:8000", "127.0.0.1:8000", "[::1]:8000", "127.0.0.1"])
+    def test_loopback_host_names_are_served(self, client, host):
+        assert client.get("/api/dashboard/tool-guard", headers={"Host": host}).status_code == 200
+
+    def test_any_host_name_is_served_when_an_api_key_is_set(self, client):
+        server.configure_server_auth("secret")
+        response = client.get("/api/dashboard/tool-guard", headers={"Host": "dash.example", "Authorization": "Bearer secret"})
+        assert response.status_code == 200
+
+
+def _settings_file_exists(client):
+    return server._tool_guard_file().exists()

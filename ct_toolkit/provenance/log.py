@@ -78,6 +78,8 @@ LEDGER_SORT = {
 FULL_VERIFY_INTERVAL_S = 300.0
 GENERATION_COUNTER = "meta:generation"  # bumped by every write and rollback: a cache key for readers
 DERIVED_MARKER = "meta:derived"
+# Set once the `event_type` column is filled for old entries. 0.5.0 filled the other derived columns but not this one.
+EVENT_TYPE_MARKER = "meta:event_type"
 _ADD_COUNTER = (
     "INSERT INTO provenance_counters (name, value) VALUES (:name, :value) "
     "ON CONFLICT (name) DO UPDATE SET value = provenance_counters.value + excluded.value"
@@ -427,18 +429,29 @@ class ProvenanceLog:
                 self._backfill_derived(run)
                 self._rebuild_counters(run)
                 run(_ADD_COUNTER, {"name": DERIVED_MARKER, "value": 1.0})
+            if not run(f"SELECT name FROM provenance_counters WHERE name = '{EVENT_TYPE_MARKER}'"):
+                self._backfill_event_type(run)
+                run(_ADD_COUNTER, {"name": EVENT_TYPE_MARKER, "value": 1.0})
 
     def _backfill_derived(self, run: Any) -> None:
         for row_id, meta_raw in run("SELECT id, metadata FROM provenance"):
             metadata = json.loads(meta_raw) if isinstance(meta_raw, str) else dict(meta_raw)
             run(
-                "UPDATE provenance SET event = :event, verdict = :verdict, tool = :tool, mode = :mode WHERE id = :id",
+                "UPDATE provenance SET event = :event, verdict = :verdict, tool = :tool, mode = :mode, event_type = :event_type "
+                "WHERE id = :id",
                 {**self._derived(metadata), "id": row_id},
             )
 
+    def _backfill_event_type(self, run: Any) -> None:
+        for row_id, meta_raw in run("SELECT id, metadata FROM provenance WHERE event_type IS NULL"):
+            metadata = json.loads(meta_raw) if isinstance(meta_raw, str) else dict(meta_raw)
+            if metadata.get("event_type") is not None:
+                run("UPDATE provenance SET event_type = :event_type WHERE id = :id",
+                    {"event_type": str(metadata["event_type"]), "id": row_id})
+
     def _rebuild_counters(self, run: Any) -> None:
         """Recomputes the tool-call counters from the active entries. Used on migration and after a rollback."""
-        run(f"DELETE FROM provenance_counters WHERE name NOT IN ('{DERIVED_MARKER}', '{GENERATION_COUNTER}')")
+        run(f"DELETE FROM provenance_counters WHERE name NOT IN ('{DERIVED_MARKER}', '{EVENT_TYPE_MARKER}', '{GENERATION_COUNTER}')")
         totals: dict[str, float] = {}
         for (meta_raw,) in run("SELECT metadata FROM provenance WHERE status = 'active' AND event = :event",
                                {"event": TOOL_CALL_EVENT}):

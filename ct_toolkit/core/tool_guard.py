@@ -110,12 +110,14 @@ RISKY_PATTERNS: tuple[tuple[Finding, re.Pattern[str]], ...] = (
 
 _NORMALIZE_STRIP = re.compile(r"[\"'\\]")
 _URL_HOST = re.compile(r"[a-z][a-z0-9+.\-]*://(?:[^/\s@\"'\\]*@)?([^/\s:\"'\\?#]+)", re.IGNORECASE)
+_SCP_HOST = re.compile(r"(?<![\w.%+-])[\w.-]+@([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(?=[\w~/.])", re.IGNORECASE)
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 
 
 def extract_hosts(text: str) -> set[str]:
-    """Lowercased hosts of `scheme://` URLs and bare IPv4 literals in `text`."""
+    """Lowercased hosts of `scheme://` URLs, `user@host:path` remotes and bare IPv4 literals in `text`."""
     hosts = {match.group(1).lower() for match in _URL_HOST.finditer(text)}
+    hosts.update(match.group(1).lower() for match in _SCP_HOST.finditer(text))
     for address in _IPV4.findall(text):
         if all(int(octet) <= 255 for octet in address.split(".")):
             hosts.add(address)
@@ -135,15 +137,44 @@ def declared_tools(tools: Optional[Iterable[Any]]) -> set[str]:
     return names
 
 
+# Text that the user and the harness wrote is trusted to name hosts. What the model wrote, and what tools returned
+# (web pages, files, command output), is not: an injected instruction names the attacker's host in exactly that text.
+UNTRUSTED_ROLES = ("assistant", "tool", "function")
+UNTRUSTED_ITEM_TYPES = ("function_call", "function_call_output")
+UNTRUSTED_BLOCK_TYPES = ("tool_use", "tool_result", "function_call", "function_call_output")
+
+
+def trusted_request(request: dict) -> dict:
+    """A copy of a Chat Completions, Messages or Responses request without the model's own turns and the tool
+    results. System prompt, user text and tool declarations stay."""
+    result = dict(request)
+    for key in ("messages", "input"):
+        items = result.get(key)
+        if not isinstance(items, list):
+            continue
+        kept = []
+        for item in items:
+            if not isinstance(item, dict) or item.get("role") in UNTRUSTED_ROLES or item.get("type") in UNTRUSTED_ITEM_TYPES:
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                item = {**item, "content": [b for b in content if not (isinstance(b, dict) and b.get("type") in UNTRUSTED_BLOCK_TYPES)]}
+            kept.append(item)
+        result[key] = kept
+    return result
+
+
 def conversation_text(message: str, history: Optional[Sequence[Any]] = None, system: Optional[str] = None) -> str:
-    """Everything the request shows the model, except the model's own earlier turns."""
+    """Everything the request shows the model, except the model's own earlier turns and tool results."""
     parts = [system or "", message or ""]
     for item in history or []:
-        if not isinstance(item, dict) or item.get("role") == "assistant":
+        if not isinstance(item, dict) or item.get("role") in UNTRUSTED_ROLES:
             continue
         content = item.get("content")
         if isinstance(content, str):
             parts.append(content)
+        elif isinstance(content, list):
+            parts.extend(b["text"] for b in content if isinstance(b, dict) and isinstance(b.get("text"), str))
     return "\n".join(parts)
 
 
@@ -416,6 +447,9 @@ def without_stream_calls(chunk: Any, blocked_keys: set[int], calls_left: int) ->
         calls = _field(delta, "tool_calls")
         if isinstance(calls, list) and calls:
             calls[:] = [call for call in calls if (_field(call, "index") or 0) not in blocked_keys]
+            for call in calls:  # clients place calls by index: the ones after a removed call move up
+                index = _field(call, "index") or 0
+                _set_field(call, "index", index - sum(1 for key in blocked_keys if key < index))
         if _field(choice, "finish_reason") == "tool_calls" and calls_left == 0:
             _set_field(choice, "finish_reason", "stop")
     return result
@@ -487,6 +521,12 @@ class ToolGuard:
         return tuple(findings)
 
     def _known_host(self, host: str, context: str) -> bool:
-        if host in context:
+        if _mentions_host(context, host):
             return True
         return any(host == allowed or host.endswith("." + allowed) for allowed in self.allowed_hosts)
+
+
+def _mentions_host(text: str, host: str) -> bool:
+    """Whether `text` names `host` as a whole: `ample.com` is not named by `example.com`, nor `example.com` by
+    `example.com.evil.test`."""
+    return re.search(rf"(?<![a-z0-9.-]){re.escape(host)}(?![a-z0-9-]|\.[a-z0-9])", text) is not None

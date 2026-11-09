@@ -129,6 +129,33 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+# Host header names a client may use to reach a server that has no API key. "testserver" is the TestClient's.
+_LOOPBACK_HOST_HEADERS = _LOOPBACK_HOSTS | {"testserver"}
+
+
+def _host_header_name(value: str) -> str:
+    """The host name in a Host header, without the port: `localhost:8000` -> `localhost`, `[::1]:8000` -> `::1`."""
+    value = value.strip().lower()
+    if value.startswith("["):
+        return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
+@app.middleware("http")
+async def _reject_foreign_host_header(request: Request, call_next):
+    """Without an API key the server trusts loopback clients. A page on another site can reach a loopback server
+    too, by pointing its own domain at 127.0.0.1 (DNS rebinding), but the browser then sends that domain in the
+    Host header. Such requests are refused."""
+    if not (_server_api_key or os.environ.get("CT_SERVER_API_KEY")):
+        host = request.headers.get("host")
+        if host and _host_header_name(host) not in _LOOPBACK_HOST_HEADERS:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Forbidden: without CT_SERVER_API_KEY the server answers only to localhost host names."},
+            )
+    return await call_next(request)
+
 class GuardrailRequest(BaseModel):
     """LiteLLM Generic Guardrail API Request Schema."""
     texts: Optional[List[str]] = Field(None, description="Extracted text from the request.")
