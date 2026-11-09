@@ -9,8 +9,13 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
 ### Added
 
+- **Provenance ledger** — The dashboard's Provenance Chain Ledger lists every active entry of the chain: divergence samples, tool-call decisions, model turns and API calls. Filter by kind and search, sort by time, kind or score, and page through the results.
+- **Model turns and API calls** — `ct-toolkit proxy` records each proxied model request as a `model_turn` (endpoint, status, finish reason, tool-call count) and every other request as an `api_call`. Text is stored as hashes only; model turns stay out of divergence telemetry and the tool-call list.
+- **Staged rules table** — Staged Kernel Rules can be filtered by sandbox status, searched, sorted and paged, like the other tables.
 - **Tool-Call Guard** — Reviews the tool calls a model response asks the harness to run, with no second model: a call to a tool the request never declared (`policy.undeclared_tool`), a host in the arguments that the conversation never mentions and that is not on the allowlist (`exfiltration.unseen_host`), and risky-action patterns (`harness.proc_environ`, `harness.k8s_service_account`, `harness.namespace_escape`, `harness.env_dump`, `network.proxy_bypass`, `secrets.credential_file`, `secrets.windows_credential_store`). Matching also runs on a form with quotes and backslashes removed and `$IFS` read as a space.
 - **Modes** — `observe` (default) only records findings. `enforce` removes calls with a high-severity finding from the response; in streams, text is forwarded live and the held tool-call events are dropped when the stream ends. Set with `--tool-guard-mode` or `CT_TOOL_GUARD_MODE`.
 - **Optional judge** — A judge model reviews only suspicious calls and can only add blocks. Recommended model: `gemma-4-E4B-it`, used as `openai/gemma-4-E4B-it` with an OpenAI-compatible base URL. Off by default; fail-open unless `tool_guard_judge_fail_closed` is set.
@@ -25,17 +30,33 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 
 ### Changed
 
+- **Divergence scoring** — Violation scores grow with the number of matched anchors: one weak match lands in the L1 band (about 0.27), two in the L2 band (0.35 to 0.43), three or more in the L3 band (0.52 and up). Medium violations now go to the L2 judge instead of straight to L3 ICM. Neural embeddings add 0.2 times the cosine distance instead of taking the maximum, so scores no longer pile up at 0.95.
+- **Dashboard tables** — Every table defaults to 10 rows. The page is wider, and the divergence timeline uses a fixed 0 to 1 scale with a 1.00 label.
 - **Install** — `typer`, `rich`, `fastapi`, `starlette` and `uvicorn` are part of the default install, so `pip install ct-toolkit` provides the `ct-toolkit` command, the web dashboard and the tool-call proxy. The `server` and `cli` extras are kept empty for compatibility. `torch` stays in the `ml` extra; the divergence loss imports it only when used.
 - **Provenance storage** — Tool-call and divergence queries run against indexed columns (`event`, `verdict`, `tool`, `mode`, `event_type`) that are filled in when an entry is written. Tool-call counts come from pre-computed counters. Existing vaults are upgraded automatically the first time they are opened.
 - **Dashboard** — Integrity is checked by a background thread: new entries every 5 seconds, a full pass every `--full-verify-interval` seconds. Dashboard reads are cached per vault write generation, with a 30-second age limit. Divergence figures are unchanged, but are computed over the newest entries only, as before.
 - **Dashboard** — The recent ledger shows the newest divergence entries (it showed the oldest before), and the score chart runs oldest to newest.
 - **Writes** — Writing an entry no longer scans the whole chain. 20,000 entries are written in 14 s on SQLite, against 133 s before.
 
+### Removed
+
+- `docs/architecture.md` and `docs/WHY.md` are no longer tracked in the repository. They stay on maintainers' disks and are ignored by git.
+
+### Fixed
+
+- **OpenCode example** — `start.sh` passes the tool-guard settings file to the proxy, so the judge configuration applies, and it finds the repository's `ct-toolkit` when the command is not on `PATH`.
+- **OpenCode example** — The AWS profile comes from `CT_AWS_PROFILE` and is no longer hard-coded in the example files.
+
 ### Security
 
 - Enforce mode keeps blocked tool calls from the harness: the response, or the stream, is sent without them.
 - Tool-call audit entries store hashes of the call text only; the call's arguments are not written to the provenance chain.
 - The `/proc`, `unshare` and `nsenter` patterns are Linux-only. Windows credential and environment forms are matched on strings; the tests run on Linux and do not exercise Windows shell behaviour.
+
+### Validation
+
+- **Automated Tests:** `617 passed, 13 skipped` (`uv run pytest`).
+- **Docs:** `mkdocs build --strict` passes.
 
 ## [0.4.4] - 2026-11-05
 

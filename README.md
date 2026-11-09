@@ -90,7 +90,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.4.4
+  Computational Theseus Toolkit (CT Toolkit) v0.5.0
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
@@ -184,7 +184,7 @@ For Deep Agents workflows, see [**ct-toolkit-deep-agents**](https://github.com/h
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Tests**        | ✅ 617 passed, 13 skipped                                                                                                                                                                                           |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
-| **Last Phase**   | ✅ v0.4.4: pyasn1 0.6.5 security fixes (ASN.1 BER/CER/DER quadratic CPU/DoS, Dependabot #123-126)                                                                              |
+| **Last Phase**   | ✅ v0.5.0: provenance ledger of all proxied traffic, graded divergence scoring, paged dashboard tables                                                                              |
 
 ### Framework & Model Support
 
