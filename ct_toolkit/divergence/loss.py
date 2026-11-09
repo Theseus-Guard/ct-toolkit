@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+except ImportError as e:  # pragma: no cover - exercised only without the ml extra
+    raise ImportError(
+        "The divergence penalty loss needs torch. Install it with: pip install 'ct-toolkit[ml]'"
+    ) from e
 
 class DivergencePenaltyLoss(nn.Module):
     """

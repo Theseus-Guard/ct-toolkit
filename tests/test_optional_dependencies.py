@@ -11,14 +11,17 @@ from ct_toolkit.core.kernel import ConstitutionalKernel
 
 
 def test_pyproject_core_dependencies_slimmed() -> None:
-    """Verifies heavy server/CLI/observability packages are moved out of core dependencies."""
+    """The CLI and web layer (typer, rich, fastapi, uvicorn) are part of the default install, so `ct-toolkit`
+    and the dashboard work after `pip install ct-toolkit`. Heavy and rarely-used packages stay optional."""
     pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
     data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
     core_deps = [dep.split(">=")[0].split("[")[0].strip().lower() for dep in data["project"]["dependencies"]]
 
-    for moved_pkg in ("instructor", "fastapi", "uvicorn", "typer", "rich", "pillow", "langsmith"):
-        assert moved_pkg not in core_deps, f"{moved_pkg} should be in optional-dependencies, not core dependencies"
+    for core_pkg in ("typer", "rich", "fastapi", "starlette", "uvicorn"):
+        assert core_pkg in core_deps, f"{core_pkg} is part of the default install"
+    for optional_pkg in ("instructor", "pillow", "langsmith", "torch"):
+        assert optional_pkg not in core_deps, f"{optional_pkg} should be in optional-dependencies, not core dependencies"
 
     opt_deps = data["project"]["optional-dependencies"]
     assert "server" in opt_deps
