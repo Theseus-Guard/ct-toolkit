@@ -9,6 +9,16 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-09
+
+### Fixed
+
+- **Tool-Call Guard: host check** — Tool results and the model's own turns no longer count as the conversation naming a host, so an injected instruction cannot make its own host trusted. A host is known only when it is named as a whole (`ample.com` is not named by `example.com`), and `user@host:path` remotes are checked.
+- **Proxy streams** — When a blocked call is removed from an Anthropic, Responses or Chat Completions stream, the calls after it are renumbered, so clients no longer see a gap in the block indexes. In observe mode the verdicts are recorded after the stream has been sent, so a slow judge no longer holds the stream open.
+- **Provenance migration** — Staged-rule entries written before 0.5.0 no longer vanish from the dashboard: 0.5.0 did not fill the `event_type` column of old entries. The fix fills it on the next open of the vault, also for vaults 0.5.0 has already opened.
+- **Dashboard** — Without an API key the server answers only to loopback host names in the `Host` header, which stops DNS-rebinding requests from a web page.
+- **Release workflow** — Releases run one at a time, and a rerun after a failed release step skips a version PyPI already has.
+
 ## [0.5.0] - 2026-11-09
 
 ### Added

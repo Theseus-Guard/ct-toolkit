@@ -7,6 +7,10 @@ on:
     tags:
       - "v*.*.*" # Or publishes a version tag pushed by hand
 
+concurrency:
+  group: release # Two merges in a row must not both publish
+  cancel-in-progress: false
+
 permissions:
   contents: write # Needed to create the GitHub Release and its tag
   id-token: write # Needed for PyPI trusted publishing
@@ -78,6 +82,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true # A rerun after a failed release step must get past the version PyPI already has
 
       - name: Publish to GitHub Release
         if: steps.decide.outputs.publish == 'true'

@@ -144,3 +144,35 @@ def test_second_writer_on_the_same_vault_keeps_the_chain_valid(tmp_path):
     first.record("q", "c")  # its cached tip is stale: the conditional write retries on the current tip
     assert first.verify_chain() is True
     assert len(first.export_log()) == 3
+
+
+def test_migration_fills_event_type_of_entries_written_before_the_derived_columns(tmp_path):
+    path = str(tmp_path / "old.db")
+    first = ProvenanceLog(vault_path=path)
+    first.record("q", "a", metadata={"event_type": "staged_promotion", "rule": "r1"})
+    first.record("q", "a", metadata={"event_type": "reflective_endorsement", "rule": "r2"})
+    first.stop_verifier()
+    # What a vault from before this release looks like: derived columns empty, no migration marker.
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE provenance SET event = NULL, verdict = NULL, tool = NULL, mode = NULL, event_type = NULL")
+    conn.execute("DELETE FROM provenance_counters")
+    conn.commit()
+    conn.close()
+
+    migrated = ProvenanceLog(vault_path=path)
+    assert len(migrated.recent_staged_entries()) == 2
+
+
+def test_migration_repairs_a_vault_that_0_5_0_already_migrated(tmp_path):
+    path = str(tmp_path / "half.db")
+    first = ProvenanceLog(vault_path=path)
+    first.record("q", "a", metadata={"event_type": "staged_promotion", "rule": "r1"})
+    first.stop_verifier()
+    # 0.5.0 left event_type empty but set its migration marker.
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE provenance SET event_type = NULL")
+    conn.execute("DELETE FROM provenance_counters WHERE name = 'meta:event_type'")
+    conn.commit()
+    conn.close()
+
+    assert len(ProvenanceLog(vault_path=path).recent_staged_entries()) == 1
