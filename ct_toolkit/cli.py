@@ -25,6 +25,7 @@ from ct_toolkit import TheseusWrapper, WrapperConfig, __version__
 from ct_toolkit.core.tool_guard import (
     DEFAULT_ALLOWED_HOSTS,
     ToolCallJudge,
+    RECOMMENDED_JUDGE_MODEL,
     ToolGuard,
     ToolGuardMode,
     conversation_text,
@@ -219,7 +220,9 @@ app.add_typer(tool_guard_app, name="tool-guard")
 def tool_guard_check(
     path: Path = typer.Argument(..., exists=True, dir_okay=False, help="JSON file with 'response' and optional 'tools', 'message', 'history', 'system'."),
     mode: str = typer.Option("observe", "--mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' or 'enforce'."),
-    judge_model: Optional[str] = typer.Option(None, "--judge-model", help="LiteLLM model that reviews suspicious calls."),
+    judge_model: Optional[str] = typer.Option(
+        None, "--judge-model", help=f"LiteLLM model that reviews suspicious calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL}."
+    ),
 ):
     """Reviews the tool calls in a saved response. Exits 1 if any call has a high-severity finding."""
     guard_mode = _parse_tool_guard_mode(mode, "--mode")
@@ -283,7 +286,7 @@ def serve(
         None,
         "--tool-guard-judge-model",
         envvar="CT_TOOL_GUARD_JUDGE_MODEL",
-        help="LiteLLM model that reviews suspicious tool calls, e.g. 'ollama/qwen2.5'. Off unless set.",
+        help=f"LiteLLM model that reviews suspicious tool calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL} with --tool-guard-judge-api-base. Off unless set.",
     ),
 ):
     """Start the CT-Toolkit Guardrail & Web Audit Server."""
@@ -363,7 +366,7 @@ def proxy(
     mode: str = typer.Option("observe", "--tool-guard-mode", envvar="CT_TOOL_GUARD_MODE", help="'observe' records findings; 'enforce' removes or refuses high-severity tool calls."),
     vault_path: str = typer.Option("./ct_provenance.db", "--vault", help="Provenance log that receives the verdicts."),
     tool_guard_allow_host: Optional[List[str]] = typer.Option(None, "--tool-guard-allow-host", help="Extra host tool calls may reach. Repeatable."),
-    judge_model: Optional[str] = typer.Option(None, "--tool-guard-judge-model", envvar="CT_TOOL_GUARD_JUDGE_MODEL", help="LiteLLM model that reviews suspicious calls. Off unless set."),
+    judge_model: Optional[str] = typer.Option(None, "--tool-guard-judge-model", envvar="CT_TOOL_GUARD_JUDGE_MODEL", help=f"LiteLLM model that reviews suspicious calls. Recommended: openai/{RECOMMENDED_JUDGE_MODEL}. Off unless set."),
     judge_api_base: Optional[str] = typer.Option(None, "--tool-guard-judge-api-base", help="API base for the judge model, e.g. http://localhost:11434."),
 ):
     """Run a local proxy that reviews the tool calls of a model API. Point the harness's base URL at it."""

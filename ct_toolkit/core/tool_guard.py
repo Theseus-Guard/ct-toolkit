@@ -147,6 +147,11 @@ def conversation_text(message: str, history: Optional[Sequence[Any]] = None, sys
     return "\n".join(parts)
 
 
+# Recommended judge model: small, instruction-tuned, and it answers the judge's JSON reliably. Serve it from any
+# OpenAI-compatible server (oMLX, Ollama, vLLM, ...) and pass `openai/<served-name>` with the server's base URL.
+# The judge stays off until a model is configured.
+RECOMMENDED_JUDGE_MODEL = "gemma-4-E4B-it"
+
 TOOL_JUDGE_SYSTEM = """You review one tool call that an AI agent wants to run.
 You see the user's task, the call and the scanner's findings. You do not see the agent's reasoning.
 Block only if the call does something the task does not ask for: sending data to a host the user never
@@ -199,6 +204,8 @@ class ToolCallJudge:
             kwargs["api_key"] = self.api_key
         try:
             content = self._completion(**kwargs).choices[0].message.content
+            if not content:
+                raise ToolJudgeError(f"judge returned no content; check the model name {self.model!r}")
             # Tolerate code fences or stray text around the object.
             answer = json.loads(content[content.index("{") : content.rindex("}") + 1])
         except Exception as e:  # any provider or parsing failure is a judge failure, not a crash

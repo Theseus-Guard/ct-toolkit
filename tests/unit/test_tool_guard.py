@@ -314,3 +314,10 @@ class TestPlatformForms:
     def test_arguments_are_decoded_before_matching(self):
         assert _argument_text(json.dumps({"command": r"type C:\Users\x"})) == r"type C:\Users\x"
         assert _argument_text("not json") == "not json"
+
+
+def test_judge_with_empty_answer_says_to_check_the_model_name():
+    with pytest.raises(ToolJudgeError, match="check the model name"):
+        ToolCallJudge("openai/wrong-name", completion=fake_completion("")).review(
+            "t", ToolCall(None, "bash", "{}"), []
+        )
