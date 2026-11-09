@@ -10,6 +10,7 @@ import hmac
 import os
 from pathlib import Path
 import re
+import sys
 import time
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -19,6 +20,7 @@ import uvicorn
 
 from ct_toolkit.core.wrapper import TheseusWrapper
 from ct_toolkit.provenance.log import ProvenanceLog
+from ct_toolkit.provenance.tool_calls import TOOL_CALL_EVENT, query_rows, rows_from_entries
 from ct_toolkit.utils.logger import get_logger
 from ct_toolkit.core.exceptions import (
     ConfigurationTamperingError,
@@ -36,6 +38,8 @@ _dashboard_vault_type: str = "local"
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 _DB_CREDENTIAL_RE = re.compile(r"(://[^:/?#\s]+:)([^@/?#\s]+)(@)")
+# LIMIT value meaning "every row": get_entries(limit) only ever returns the oldest `limit` rows.
+_ALL_ENTRIES = sys.maxsize
 
 _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
@@ -290,6 +294,13 @@ def _extract_response_text(response_obj: Any) -> str:
     return ""
 
 
+def _dashboard_log() -> ProvenanceLog:
+    """The provenance log the dashboard reads: the running wrapper's log, else the configured vault."""
+    if _wrapper_instance is not None and getattr(_wrapper_instance, "_provenance_log", None) is not None:
+        return _wrapper_instance._provenance_log
+    return ProvenanceLog(vault_type=_dashboard_vault_type, vault_path=_dashboard_vault_path)
+
+
 def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
     """Collects Provenance Chain integrity, L1/L2/L3 divergence metrics, and staged rules."""
     if _wrapper_instance is not None and getattr(_wrapper_instance, "_provenance_log", None) is not None:
@@ -318,7 +329,11 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
         chain_ok = False
         tampered_entry_id = getattr(exc, "entry_id", str(exc))
 
-    entries = log.get_entries(limit=limit, include_rolled_back=False)
+    # get_entries(limit) returns the OLDEST rows. Load the whole active chain instead, drop tool-call
+    # decisions (not divergence entries), and keep the newest `limit` divergence entries, oldest first.
+    all_entries = log.get_entries(limit=_ALL_ENTRIES, include_rolled_back=False)
+    divergence_entries = [e for e in all_entries if (e.metadata or {}).get("event") != TOOL_CALL_EVENT]
+    entries = divergence_entries[max(len(divergence_entries) - limit, 0):]
     scores = [e.divergence_score for e in entries if e.divergence_score is not None]
     avg_score = (sum(scores) / len(scores)) if scores else 0.0
     max_score = max(scores) if scores else 0.0
@@ -378,24 +393,24 @@ def get_dashboard_telemetry(limit: int = 200) -> Dict[str, Any]:
                 }
             )
 
-        if len(recent_entries) < 25:
-            recent_entries.append(
-                {
-                    "id": entry.id,
-                    "timestamp": entry.timestamp,
-                    "divergence_score": entry.divergence_score,
-                    "tier": resolved_tier,
-                    "kernel": str(meta.get("kernel", active_kernel)),
-                    "template": str(meta.get("template", active_template)),
-                    "model": str(meta.get("model", "unknown")),
-                    "prev_entry_hash": entry.prev_entry_hash,
-                    "content_hash": entry.content_hash(),
-                    "hmac_signature": entry.hmac_signature,
-                }
-            )
+        recent_entries.append(
+            {
+                "id": entry.id,
+                "timestamp": entry.timestamp,
+                "divergence_score": entry.divergence_score,
+                "tier": resolved_tier,
+                "kernel": str(meta.get("kernel", active_kernel)),
+                "template": str(meta.get("template", active_template)),
+                "model": str(meta.get("model", "unknown")),
+                "prev_entry_hash": entry.prev_entry_hash,
+                "content_hash": entry.content_hash(),
+                "hmac_signature": entry.hmac_signature,
+            }
+        )
 
-    # Reverse score_series so chart renders chronologically (oldest -> newest)
-    score_series.reverse()
+    # entries are oldest -> newest, which is the order score_series is drawn in. The ledger shows newest first.
+    recent_entries.reverse()
+    del recent_entries[25:]
 
     now = time.time()
     staged_rules_out: List[Dict[str, Any]] = []
@@ -452,6 +467,38 @@ async def dashboard_status_api(limit: int = Query(200, ge=1, le=2000)) -> JSONRe
     except Exception as exc:
         logger.error(f"Dashboard status API error: {exc}")
         raise HTTPException(status_code=500, detail="Failed to read provenance telemetry.")
+
+
+@app.get("/api/dashboard/tool-calls", dependencies=[Depends(_verify_api_key)])
+def dashboard_tool_calls_api(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=200),
+    sort: str = Query("time", description="One of: time, tool, verdict, mode."),
+    order: str = Query("desc", description="asc or desc."),
+    verdict: Optional[str] = Query(None, description="passed, flagged or blocked."),
+    tool: Optional[str] = Query(None, max_length=256, description="Substring of the tool name."),
+    q: Optional[str] = Query(None, max_length=256, description="Free text over tool, findings, judge and model."),
+) -> JSONResponse:
+    """Paged, sorted and filtered guard tool-call decisions from the provenance vault."""
+    try:
+        rows = rows_from_entries(_dashboard_log().entries_with_event(TOOL_CALL_EVENT))
+    except Exception as exc:
+        logger.error(f"Dashboard tool-calls API error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to read provenance tool calls.")
+    try:
+        result = query_rows(
+            rows,
+            verdict=verdict,
+            tool=tool,
+            search=q,
+            sort=sort,
+            order=order,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(content=result.to_dict(), headers=_SECURITY_HEADERS)
 
 
 @app.get("/", include_in_schema=False)
@@ -797,6 +844,45 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       flex-direction: column;
       gap: 20px;
     }
+    .badge.verdict-passed { background: rgba(16,185,129,0.14); color: #34d399; }
+    .badge.verdict-flagged { background: rgba(245,158,11,0.15); color: #fbbf24; }
+    .badge.verdict-blocked { background: rgba(239,68,68,0.18); color: #f87171; }
+    .badge.verdict-unknown { background: rgba(148,163,184,0.12); color: var(--text-muted); }
+    .tc-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .tc-stats .kpi-value { font-size: 1.3rem; }
+    .tone-passed { color: #34d399; }
+    .tone-flagged { color: #fbbf24; }
+    .tone-blocked { color: #f87171; }
+    .tc-chart { width: 100%; height: 100px; margin-bottom: 16px; }
+    .tc-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .tc-pager {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 14px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .pill-btn:disabled { opacity: 0.4; cursor: default; }
+    .pill-btn:disabled:hover { border-color: var(--border-highlight); background: var(--bg-card); }
+    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+    th.sortable:hover { color: var(--text-main); }
+    .sort-ind { color: var(--accent-cyan); margin-left: 4px; font-family: var(--font-mono); }
+    .text-cell { max-width: 320px; white-space: normal; word-break: break-word; }
+
     footer {
       margin-top: 28px;
       padding-top: 18px;
@@ -931,6 +1017,75 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </table>
         </div>
       </div>
+
+      <div class="card" id="tool-calls-card">
+        <div class="section-header">
+          <div class="section-title">Tool Calls (Guard Decisions)</div>
+          <div class="section-meta" id="tc-meta">0 recorded</div>
+        </div>
+        <div class="tc-stats">
+          <div class="card">
+            <div class="kpi-label">Total</div>
+            <div class="kpi-value" id="tc-total">0</div>
+          </div>
+          <div class="card">
+            <div class="kpi-label">Passed</div>
+            <div class="kpi-value tone-passed" id="tc-passed">0</div>
+          </div>
+          <div class="card">
+            <div class="kpi-label">Flagged</div>
+            <div class="kpi-value tone-flagged" id="tc-flagged">0</div>
+          </div>
+          <div class="card">
+            <div class="kpi-label">Blocked</div>
+            <div class="kpi-value tone-blocked" id="tc-blocked">0</div>
+          </div>
+        </div>
+        <div class="tc-chart" id="tc-chart"></div>
+        <div class="tc-controls">
+          <select id="tc-verdict" class="api-input" aria-label="Filter by verdict">
+            <option value="">All verdicts</option>
+            <option value="passed">passed</option>
+            <option value="flagged">flagged</option>
+            <option value="blocked">blocked</option>
+          </select>
+          <input type="text" id="tc-tool" class="api-input" placeholder="Tool name contains..." aria-label="Filter by tool" maxlength="256" style="width: 180px;" />
+          <input type="search" id="tc-search" class="api-input" placeholder="Search findings, judge, model..." aria-label="Search tool calls" maxlength="256" style="width: 240px;" />
+          <select id="tc-page-size" class="api-input" aria-label="Rows per page">
+            <option value="10">10 / page</option>
+            <option value="25" selected>25 / page</option>
+            <option value="50">50 / page</option>
+            <option value="100">100 / page</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="sortable" data-sort="time">Time<span class="sort-ind"></span></th>
+                <th class="sortable" data-sort="tool">Tool<span class="sort-ind"></span></th>
+                <th class="sortable" data-sort="verdict">Verdict<span class="sort-ind"></span></th>
+                <th>Findings</th>
+                <th>Judge</th>
+                <th class="sortable" data-sort="mode">Mode<span class="sort-ind"></span></th>
+                <th>Model</th>
+                <th>ID</th>
+              </tr>
+            </thead>
+            <tbody id="tc-tbody">
+              <tr><td colspan="8" class="empty-state">Loading tool calls...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tc-pager">
+          <div id="tc-count">0 matching</div>
+          <div class="controls">
+            <button class="pill-btn" id="tc-prev" type="button">&#x2039; Prev</button>
+            <span class="section-meta" id="tc-page-label">page 1 of 1</span>
+            <button class="pill-btn" id="tc-next" type="button">Next &#x203A;</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <footer>
@@ -947,7 +1102,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     apiKeyInput.value = sessionStorage.getItem('ct_dashboard_api_key') || '';
     apiKeyInput.addEventListener('change', () => {
       sessionStorage.setItem('ct_dashboard_api_key', apiKeyInput.value.trim());
-      fetchTelemetry();
+      refreshDashboard();
     });
 
     function escapeHtml(str) {
@@ -1117,14 +1272,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }).join('');
     }
 
-    async function fetchTelemetry() {
+    function dashboardHeaders() {
       const headers = {};
       const key = apiKeyInput.value.trim();
       if (key) {
         headers['Authorization'] = `Bearer ${key}`;
       }
+      return headers;
+    }
+
+    async function fetchTelemetry() {
       try {
-        const res = await fetch('/api/dashboard/status?limit=200', { headers });
+        const res = await fetch('/api/dashboard/status?limit=200', { headers: dashboardHeaders() });
         if (res.status === 401) {
           showBanner('Authentication required (401 Unauthorized): Enter your Server API Key in the top-right box.');
           return;
@@ -1160,6 +1319,169 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    // Tool-call table state. It survives the 5 s auto-refresh: refreshDashboard() re-requests with the same query.
+    const TOOL_CALL_COLORS = { passed: '#10b981', flagged: '#f59e0b', blocked: '#ef4444' };
+    const toolCallState = { page: 1, pageSize: 25, sort: 'time', order: 'desc', verdict: '', tool: '', q: '' };
+    const toolQueryTimers = {};
+    let toolCallRequestSeq = 0;
+
+    function verdictClass(verdict) {
+      // Only known verdicts get a colour class; anything else from the log falls back to a neutral badge.
+      return Object.prototype.hasOwnProperty.call(TOOL_CALL_COLORS, verdict) ? `verdict-${verdict}` : 'verdict-unknown';
+    }
+
+    function renderToolChart(byVerdict) {
+      const container = document.getElementById('tc-chart');
+      const keys = Object.keys(TOOL_CALL_COLORS);
+      const counts = keys.map(k => Number((byVerdict && byVerdict[k]) || 0));
+      const max = Math.max(1, ...counts);
+      const w = container.clientWidth || 720;
+      const labelW = 84, valueW = 56, rowH = 30, barH = 16;
+      const barW = Math.max(w - labelW - valueW, 60);
+      const rows = keys.map((k, i) => {
+        const y = i * rowH + 4;
+        const bw = (counts[i] / max) * barW;
+        return `
+          <text x="0" y="${y + 13}" fill="#9ca3af" font-size="12" font-family="monospace">${escapeHtml(k)}</text>
+          <rect x="${labelW}" y="${y}" width="${barW}" height="${barH}" rx="4" fill="#1f2937" />
+          <rect x="${labelW}" y="${y}" width="${bw.toFixed(1)}" height="${barH}" rx="4" fill="${TOOL_CALL_COLORS[k]}" />
+          <text x="${labelW + barW + 8}" y="${y + 13}" fill="#f3f4f6" font-size="12" font-family="monospace">${counts[i]}</text>
+        `;
+      }).join('');
+      container.innerHTML = `<svg width="100%" height="100" viewBox="0 0 ${w} 100" preserveAspectRatio="none">${rows}</svg>`;
+    }
+
+    function renderToolCallRows(items) {
+      const tbody = document.getElementById('tc-tbody');
+      if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-state">No tool calls match these filters.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map(r => {
+        const dt = new Date(r.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+        const verdict = String(r.verdict || '—');
+        return `
+          <tr>
+            <td class="mono">${escapeHtml(dt)}</td>
+            <td class="mono">${escapeHtml(r.tool || '—')}</td>
+            <td><span class="badge ${escapeHtml(verdictClass(r.verdict))}">${escapeHtml(verdict.toUpperCase())}</span></td>
+            <td class="text-cell">${escapeHtml(r.findings || '—')}</td>
+            <td class="text-cell">${escapeHtml(r.judge || '—')}</td>
+            <td class="mono">${escapeHtml(r.mode || '—')}</td>
+            <td class="mono">${escapeHtml(r.llm_model || '—')}</td>
+            <td><span class="hash-pill" title="${escapeHtml(r.id)}">${escapeHtml(String(r.id).slice(0, 10))}…</span></td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderToolCalls(data) {
+      const summary = data.summary || {};
+      const byVerdict = summary.by_verdict || {};
+      document.getElementById('tc-meta').textContent = `${summary.total ?? 0} recorded`;
+      document.getElementById('tc-total').textContent = String(summary.total ?? 0);
+      document.getElementById('tc-passed').textContent = String(byVerdict.passed ?? 0);
+      document.getElementById('tc-flagged').textContent = String(byVerdict.flagged ?? 0);
+      document.getElementById('tc-blocked').textContent = String(byVerdict.blocked ?? 0);
+      renderToolChart(byVerdict);
+
+      renderToolCallRows(data.items || []);
+      document.getElementById('tc-count').textContent = `${data.total} matching`;
+      document.getElementById('tc-page-label').textContent = `page ${data.page} of ${data.pages}`;
+      document.getElementById('tc-prev').disabled = data.page <= 1;
+      document.getElementById('tc-next').disabled = data.page >= data.pages;
+
+      document.querySelectorAll('th.sortable').forEach(th => {
+        const active = th.dataset.sort === toolCallState.sort;
+        th.querySelector('.sort-ind').textContent = active ? (toolCallState.order === 'asc' ? '▲' : '▼') : '';
+      });
+    }
+
+    function renderToolCallError(message) {
+      document.getElementById('tc-tbody').innerHTML = `<tr><td colspan="8" class="empty-state">${escapeHtml(message)}</td></tr>`;
+    }
+
+    async function fetchToolCalls() {
+      const seq = ++toolCallRequestSeq;
+      const params = new URLSearchParams({
+        page: String(toolCallState.page),
+        page_size: String(toolCallState.pageSize),
+        sort: toolCallState.sort,
+        order: toolCallState.order,
+      });
+      if (toolCallState.verdict) params.set('verdict', toolCallState.verdict);
+      if (toolCallState.tool) params.set('tool', toolCallState.tool);
+      if (toolCallState.q) params.set('q', toolCallState.q);
+      try {
+        const res = await fetch(`/api/dashboard/tool-calls?${params.toString()}`, { headers: dashboardHeaders() });
+        if (seq !== toolCallRequestSeq) return;
+        if (res.status === 401) {
+          renderToolCallError('Authentication required (401): enter your Server API Key in the top-right box.');
+          return;
+        }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const detail = typeof err.detail === 'string' ? err.detail : res.statusText;
+          renderToolCallError(`Tool calls error (${res.status}): ${detail}`);
+          return;
+        }
+        const data = await res.json();
+        if (seq !== toolCallRequestSeq) return;
+        toolCallState.page = data.page;
+        renderToolCalls(data);
+      } catch (err) {
+        if (seq === toolCallRequestSeq) renderToolCallError(`Failed to load tool calls: ${err.message}`);
+      }
+    }
+
+    function refreshDashboard() {
+      fetchTelemetry();
+      fetchToolCalls();
+    }
+
+    function setToolQuery(key, value) {
+      clearTimeout(toolQueryTimers[key]);
+      toolQueryTimers[key] = setTimeout(() => {
+        toolCallState[key] = value.trim();
+        toolCallState.page = 1;
+        fetchToolCalls();
+      }, 250);
+    }
+
+    document.getElementById('tc-verdict').addEventListener('change', (e) => {
+      toolCallState.verdict = e.target.value;
+      toolCallState.page = 1;
+      fetchToolCalls();
+    });
+    document.getElementById('tc-page-size').addEventListener('change', (e) => {
+      toolCallState.pageSize = Number(e.target.value);
+      toolCallState.page = 1;
+      fetchToolCalls();
+    });
+    document.getElementById('tc-tool').addEventListener('input', (e) => setToolQuery('tool', e.target.value));
+    document.getElementById('tc-search').addEventListener('input', (e) => setToolQuery('q', e.target.value));
+    document.getElementById('tc-prev').addEventListener('click', () => {
+      toolCallState.page = Math.max(1, toolCallState.page - 1);
+      fetchToolCalls();
+    });
+    document.getElementById('tc-next').addEventListener('click', () => {
+      toolCallState.page += 1;
+      fetchToolCalls();
+    });
+    document.querySelectorAll('th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (toolCallState.sort === key) {
+          toolCallState.order = toolCallState.order === 'asc' ? 'desc' : 'asc';
+        } else {
+          toolCallState.sort = key;
+          toolCallState.order = 'asc';
+        }
+        toolCallState.page = 1;
+        fetchToolCalls();
+      });
+    });
+
     function toggleAutoRefresh() {
       autoRefresh = !autoRefresh;
       const btn = document.getElementById('toggle-live-btn');
@@ -1176,11 +1498,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    fetchTelemetry();
+    refreshDashboard();
     refreshTimer = setInterval(() => {
-      if (autoRefresh) fetchTelemetry();
+      if (autoRefresh) refreshDashboard();
     }, 5000);
-    window.addEventListener('resize', () => fetchTelemetry());
+    window.addEventListener('resize', () => refreshDashboard());
   </script>
 </body>
 </html>
