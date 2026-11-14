@@ -9,6 +9,16 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-14
+
+### Security
+
+- **OpenTelemetry ReDoS fix** — `opentelemetry-api` `<= 1.45.1` could spend quadratic time parsing a crafted `traceparent` value (GHSA-mf5v-w3w3-f6cg, CVE-2026-126360, Dependabot alert #127, medium). The package now requires `opentelemetry-api>=1.45.2`; the lock resolves `opentelemetry-api` and `opentelemetry-sdk` to 1.45.2 and `opentelemetry-semantic-conventions` to 0.66b2.
+
+### Validation
+
+- Full test suite: 617 passed, 13 skipped.
+
 ## [0.5.1] - 2026-11-09
 
 ### Fixed

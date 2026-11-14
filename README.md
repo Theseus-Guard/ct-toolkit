@@ -90,7 +90,7 @@ $ ct-toolkit status
     | |  | |  | | |____ ____) | |____| |__| |____) | | |__| | |__| |/ ____ \| | \ \| |__| |
     |_|  |_|  |_|______|_____/|______|_____/|_____/   \_____|\____//_/    \_\_|  \_\_____/ 
 
-  Computational Theseus Toolkit (CT Toolkit) v0.5.1
+  Computational Theseus Toolkit (CT Toolkit) v0.5.2
   Identity Continuity Guardrails for Agentic Systems
 
 ╭──────────────────── CT Toolkit Audit & Telemetry Status ─────────────────────╮
@@ -184,7 +184,7 @@ For Deep Agents workflows, see [**ct-toolkit-deep-agents**](https://github.com/h
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Tests**        | ✅ 617 passed, 13 skipped                                                                                                                                                                                           |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
-| **Last Phase**   | ✅ v0.5.1: tool-call guard host check, proxy stream fixes, provenance migration, dashboard DNS-rebinding guard                                                                              |
+| **Last Phase**   | ✅ v0.5.2: security fix for OpenTelemetry API (GHSA-mf5v-w3w3-f6cg), dependencies updated to 1.45.2                                                                             |
 
 ### Framework & Model Support
 
