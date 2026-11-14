@@ -35,7 +35,7 @@ CT Toolkit addresses this by treating **identity continuity as a first-class sys
 | Distributed Multi-Agent Propagation    | ✅ Complete (HMAC-SHA256 signed HTTP headers + replay window verification)                                                                                                                                                                           |
 | Audit & Telemetry Dashboard            | ✅ Complete (`ct-toolkit status`, `ct-toolkit dashboard --web` Interactive Web UI + OpenTelemetry spans/metrics)                                                                                                                                     |
 | Documentation                          | ✅ Complete (Added [Live Examples](https://theseus-guard.github.io/ct-toolkit/examples/), [CLI & Web Dashboard Guide](guides/cli-and-web-dashboard.md), and [FastAPI validation example](https://github.com/hakandamar/ct-toolkit-fastapi))          |
-| Test coverage                          | ✅ 426 passed, 3 skipped (90%+ code coverage)                                                                                                                                                                                                        |
+| Test coverage                          | ✅ 635 passed, 13 skipped (90%+ code coverage)                                                                                                                                                                                                        |
 
 ---
 
@@ -173,7 +173,7 @@ The roadmap covers all mechanisms defined in the paper and the research directio
 
 ## Final Results
 
-- **Total Passing Tests:** 426 passed, 3 skipped (0 failed)
+- **Total Passing Tests:** 635 passed, 13 skipped (0 failed)
 - **Overall Code Coverage:** 90%+
 
 ### Verification Recording
@@ -182,7 +182,7 @@ All backend and dashboard features are verified using the automated test suite:
 
 ```bash
 uv run pytest --cov=ct_toolkit tests/
-# Result: 426 passed, 3 skipped, 0 failures
+# Result: 635 passed, 13 skipped, 0 failures
 ```
 
 ---

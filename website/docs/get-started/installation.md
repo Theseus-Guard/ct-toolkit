@@ -96,7 +96,7 @@ Run the tests:
 
 ```bash
 pytest tests/ -v
-# 426 passed, 3 skipped
+# 635 passed, 13 skipped
 ```
 
 ---

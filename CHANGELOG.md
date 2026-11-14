@@ -17,7 +17,7 @@ _(Note: This project uses `python-semantic-release` for automated versioning and
 
 ### Validation
 
-- Full test suite: 617 passed, 13 skipped.
+- Full test suite: 635 passed, 13 skipped.
 
 ## [0.5.1] - 2026-11-09
 

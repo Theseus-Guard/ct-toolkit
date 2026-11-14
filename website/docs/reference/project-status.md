@@ -8,7 +8,7 @@
 
 | Metric    | Status                                                                                                                                                                                                              |
 | :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Tests     | ✅ 426 passed, 3 skipped                                                                                                                                                                                            |
+| Tests     | ✅ 635 passed, 13 skipped                                                                                                                                                                                            |
 | Coverage  | ✅ 90%+                                                                                                                                                                                                             |
 | PyPI      | ✅ `pip install ct-toolkit`                                                                                                                                                                                         |
 | Downloads | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |

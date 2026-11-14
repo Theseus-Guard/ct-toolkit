@@ -182,7 +182,7 @@ For Deep Agents workflows, see [**ct-toolkit-deep-agents**](https://github.com/h
 
 | Metric           | Status                                                                                                                                                                                                              |
 | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Tests**        | ✅ 617 passed, 13 skipped                                                                                                                                                                                           |
+| **Tests**        | ✅ 635 passed, 13 skipped                                                                                                                                                                                           |
 | **Downloads**    | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
 | **Last Phase**   | ✅ v0.5.2: security fix for OpenTelemetry API (GHSA-mf5v-w3w3-f6cg), dependencies updated to 1.45.2                                                                             |
 
