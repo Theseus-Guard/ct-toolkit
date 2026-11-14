@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ct-toolkit"
-version = "0.5.1"
+version = "0.5.2"
 description = "Computational Theseus Toolkit — Identity Continuity Guardrails for Agentic Systems"
 readme = "README.md"
 requires-python = ">=3.11, <3.14"
@@ -44,7 +44,7 @@ Issues = "https://github.com/Theseus-Guard/ct-toolkit/issues"
 server = []
 cli = []
 observability = [
-    "opentelemetry-api>=1.25.0",
+    "opentelemetry-api>=1.45.2",
     "opentelemetry-sdk>=1.25.0",
     "langsmith>=0.8.18", # Fix: TracingMiddleware arbitrary file read (GHSA-f4xh-w4cj-qxq8, Dependabot #42)
 ]

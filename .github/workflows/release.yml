@@ -81,7 +81,6 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true # A rerun after a failed release step must get past the version PyPI already has
 
       - name: Publish to GitHub Release

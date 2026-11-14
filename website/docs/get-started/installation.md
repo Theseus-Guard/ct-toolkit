@@ -96,7 +96,7 @@ Run the tests:
 
 ```bash
 pytest tests/ -v
-# 426 passed, 3 skipped
+# 635 passed, 13 skipped
 ```
 
 ---
@@ -141,7 +141,7 @@ Always use a virtual environment in production:
 
 ```python
 import ct_toolkit
-print(ct_toolkit.__version__)  # e.g. 0.5.1
+print(ct_toolkit.__version__)  # e.g. 0.5.2
 ```
 
 Or run a quick sanity check:

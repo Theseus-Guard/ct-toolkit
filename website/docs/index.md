@@ -163,8 +163,8 @@ Inspect HMAC provenance chain integrity, L1/L2/L3 divergence tier distribution, 
 
 | Metric        | Status                                                                                                                                                                                                              |
 | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Version**   | ✅ `v0.5.1`                                                                                                                                                                                                         |
-| **Tests**     | ✅ 426 passed, 3 skipped                                                                                                                                                                                            |
+| **Version**   | ✅ `v0.5.2`                                                                                                                                                                                                         |
+| **Tests**     | ✅ 635 passed, 13 skipped                                                                                                                                                                                            |
 | **Coverage**  | ✅ 90%+                                                                                                                                                                                                             |
 | **PyPI**      | ✅ `pip install ct-toolkit`                                                                                                                                                                                         |
 | **Downloads** | [![PyPI Downloads](https://static.pepy.tech/personalized-badge/ct-toolkit?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=MAGENTA&left_text=downloads)](https://pepy.tech/projects/ct-toolkit) |
